@@ -17,7 +17,7 @@ Class {
 { #category : 'actions' }
 CodeCoverageAnalyzer class >> example [
     ^ self runCoverageForModel: (MooseModel root at: 2)
-        file: 'C:\Users\mea.belhadj\Documents\comparision\todo-list-java-to-typescript\src/controllers/TaskController.ts'
+        file: 'C:\Users\mea.belhadj\Documents\comparision\todo-list-java-to-typescript\src/controllers/NotificationController.ts'
 
 ]
 
