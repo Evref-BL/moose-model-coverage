@@ -1,12 +1,12 @@
 Class {
-	#name : 'BaselineOfCodeCoverage',
+	#name : 'BaselineOfMooseModelCoverage',
 	#superclass : 'BaselineOf',
 	#category : 'BaselineOfMooseModelCoverage',
 	#package : 'BaselineOfMooseModelCoverage'
 }
 
 { #category : 'baselines' }
-BaselineOfCodeCoverage >> baseline: spec [
+BaselineOfMooseModelCoverage >> baseline: spec [
 	"donne l'ensemble des package requis pour la baseline (à inclure dans l'archive définis par Iceberg)"
 	<baseline>
 	spec for: #common do: [ 
@@ -16,23 +16,23 @@ BaselineOfCodeCoverage >> baseline: spec [
 ]
 
 { #category : 'dependencies' }
-BaselineOfCodeCoverage >> defineDependencies: spec [
+BaselineOfMooseModelCoverage >> defineDependencies: spec [
 	"donne les ref vers le projet qui se trouve sur un depot distance"
 	spec
 		baseline: 'Moose'
-		with: [ spec repository: 'github://moosetechnology/Moose:master/src' ]
+		with: [ spec repository: 'github://moosetechnology/Moose:development/src' ]
 ]
 
 { #category : 'groups' }
-BaselineOfCodeCoverage >> defineGroups: spec [
+BaselineOfMooseModelCoverage >> defineGroups: spec [
 	"optional if you want to create specifc configuration of your baseline"
 	spec
-		group: 'default' with: #('CodeCoverage')
+		group: 'default' with: #('MooseModelCoverage')
 ]
 
 { #category : 'packages' }
-BaselineOfCodeCoverage >> definePackages: spec [
+BaselineOfMooseModelCoverage >> definePackages: spec [
 	"mentionne l'ensemble des packages requis (ici 1 package)"
 	spec
-		package: 'CodeCoverage' with: [ spec requires: #('Moose') ]
+		package: 'MooseModelCoverage' with: [ spec requires: #('Moose') ]
 ]
