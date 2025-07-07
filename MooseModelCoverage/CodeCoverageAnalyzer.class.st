@@ -10,8 +10,8 @@ Class {
 		'totalLines',
 		'entityTypes'
 	],
-	#category : 'CodeCoverage',
-	#package : 'CodeCoverage'
+	#category : 'MooseModelCoverage',
+	#package : 'MooseModelCoverage'
 }
 
 { #category : 'actions' }

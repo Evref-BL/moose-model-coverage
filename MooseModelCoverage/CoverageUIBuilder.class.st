@@ -12,8 +12,8 @@ Class {
 		'table',
 		'isInitialized'
 	],
-	#category : 'CodeCoverage',
-	#package : 'CodeCoverage'
+	#category : 'MooseModelCoverage',
+	#package : 'MooseModelCoverage'
 }
 
 { #category : 'instance creation' }
