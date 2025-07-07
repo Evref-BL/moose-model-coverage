@@ -10,7 +10,7 @@ Class {
 
 { #category : 'tests' }
 CodeCoverageAnalyzerTest >> testCoveredLines [
-
+"todo"
 	self flag: #toImplement.
 	self assert: false
 ]
