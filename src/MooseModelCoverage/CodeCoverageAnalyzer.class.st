@@ -16,8 +16,8 @@ Class {
 
 { #category : 'actions' }
 CodeCoverageAnalyzer class >> example [
-    ^ self runCoverageForModel: (MooseModel root at: 2)
-        file: 'C:\Users\mea.belhadj\Documents\comparision\todo-list-java-to-typescript\src/controllers/TaskController.ts'
+    ^ self runCoverageForModel: (MooseModel root at: 1)
+        file: 'C:\Users\mea.belhadj\Documents\comparision\todo-list-java\src\main\java\com\example\todolist\Main.java'
 
 ]
 
@@ -141,30 +141,38 @@ CodeCoverageAnalyzer >> processAnchor: anchor [
 
 { #category : 'processing' }
 CodeCoverageAnalyzer >> processAnchors [
-	| anchors |
-	model ifNil: [ self error: 'Model not loaded' ].
-	anchors := model allWithType: FamixTypeScriptIndexedFileAnchor.
-	anchors := anchors select: [ :anchor |
-		| matchesFile anchorPath fileBaseName |
-		anchorPath := anchor fileName ifNil: [ '' ].
-		fileBaseName := fileName asFileReference basename.
-		anchorPath := anchorPath replaceAll: $\ with: $/.
-		fileBaseName := fileBaseName replaceAll: $\ with: $/.
-		matchesFile := anchorPath = fileName or: [ 
-			anchorPath = fileBaseName or: [ 
-				anchorPath includesSubstring: fileBaseName ] ].
-		matchesFile and: [
-			anchor startLine notNil and: [
-				anchor endLine notNil and: [
-					anchor startLine >= 1 and: [
-						anchor endLine >= anchor startLine and: [
-							anchor endLine <= totalLines ] ] ] ] ] ].
-	
-
-	
-	
-	anchors ifEmpty: [ ^ self ].
-	anchors do: [ :anchor | self processAnchor: anchor ]. 
+    | anchors indexedFileAnchorClass |
+    
+    model ifNil: [ self error: 'Model not loaded' ].
+    
+    "Get all source anchors and find the IndexedFileAnchor type that's actually in the model"
+    indexedFileAnchorClass := (model allUsing: FamixTSourceAnchor) 
+        detect: [ :anchor | anchor class name asString endsWith: 'IndexedFileAnchor' ]
+        ifFound: [ :anchor | anchor class ]
+        ifNone: [ self error: 'No IndexedFileAnchor found in model' ].
+    
+    "Now get all anchors of that type"
+    anchors := model allWithType: indexedFileAnchorClass.
+    
+    "Rest of the filtering logic stays the same"
+    anchors := anchors select: [ :anchor |
+        | matchesFile anchorPath fileBaseName |
+        anchorPath := anchor fileName ifNil: [ '' ].
+        fileBaseName := fileName asFileReference basename.
+        anchorPath := anchorPath replaceAll: $\ with: $/.
+        fileBaseName := fileBaseName replaceAll: $\ with: $/.
+        matchesFile := anchorPath = fileName or: [ 
+            anchorPath = fileBaseName or: [ 
+                anchorPath includesSubstring: fileBaseName ] ].
+        matchesFile and: [
+            anchor startLine notNil and: [
+                anchor endLine notNil and: [
+                    anchor startLine >= 1 and: [
+                        anchor endLine >= anchor startLine and: [
+                            anchor endLine <= totalLines ] ] ] ] ] ].
+    
+    anchors ifEmpty: [ ^ self ].
+    anchors do: [ :anchor | self processAnchor: anchor ].
 ]
 
 { #category : 'accessing' }
