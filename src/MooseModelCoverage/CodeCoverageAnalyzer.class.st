@@ -16,15 +16,15 @@ Class {
 
 { #category : 'actions' }
 CodeCoverageAnalyzer class >> example [
-    ^ self runCoverageForModel: (MooseModel root at: 1)
-        file: 'C:\Users\mea.belhadj\Documents\comparision\todo-list-java\src\main\java\com\example\todolist\Main.java'
+    ^ self runCoverageForModel: (MooseModel root at: 2)
+        file: 'C:\Users\mea.belhadj\Documents\comparision\todo-list-java-to-typescript\src\controllers\TaskController.ts'
 
 ]
 
 { #category : 'actions' }
 CodeCoverageAnalyzer class >> runCoverageForModel: aMooseModel file: aFileName [
 	| analyzer ui |
-	analyzer := CodeCoverageAnalyzer new .
+	analyzer := CodeCoverageAnalyzer new.
 	analyzer loadModel: aMooseModel file: aFileName.
 	analyzer processAnchors.
 	ui := CoverageUIBuilder new initializeWithAnalyzer: analyzer.
@@ -141,29 +141,31 @@ CodeCoverageAnalyzer >> processAnchor: anchor [
 
 { #category : 'processing' }
 CodeCoverageAnalyzer >> processAnchors [
-    | anchors indexedFileAnchorClass |
+    | anchors  |
     
     model ifNil: [ self error: 'Model not loaded' ].
     
     "Get all source anchors and find the IndexedFileAnchor type that's actually in the model"
-    indexedFileAnchorClass := (model allUsing: FamixTSourceAnchor) 
-        detect: [ :anchor | anchor class name asString endsWith: 'IndexedFileAnchor' ]
-        ifFound: [ :anchor | anchor class ]
-        ifNone: [ self error: 'No IndexedFileAnchor found in model' ].
-    
+
     "Now get all anchors of that type"
-    anchors := model allWithType: indexedFileAnchorClass.
+    anchors := (model allUsing: FamixTSourceAnchor).
+     "use a safe guard; however need to be proven usefull"
+	(anchors isNotEmpty and: [(anchors first class name asString endsWith: 'IndexedFileAnchor')]) ifFalse: [ self error: 'No IndexedFileAnchor found in model' ].
     
     "Rest of the filtering logic stays the same"
     anchors := anchors select: [ :anchor |
         | matchesFile anchorPath fileBaseName |
         anchorPath := anchor fileName ifNil: [ '' ].
         fileBaseName := fileName asFileReference basename.
-        anchorPath := anchorPath replaceAll: $\ with: $/.
-        fileBaseName := fileBaseName replaceAll: $\ with: $/.
-        matchesFile := anchorPath = fileName or: [ 
+
+        "anchorPath := anchorPath replaceAll: $\ with: $/.
+        fileBaseName := fileBaseName replaceAll: $\ with: $/."
+
+		matchesFile := anchorPath asFileReference asPath segments last includesSubstring: fileBaseName .
+
+        "matchesFile := anchorPath = fileName or: [ 
             anchorPath = fileBaseName or: [ 
-                anchorPath includesSubstring: fileBaseName ] ].
+                anchorPath includesSubstring: fileBaseName ] ]."
         matchesFile and: [
             anchor startLine notNil and: [
                 anchor endLine notNil and: [
