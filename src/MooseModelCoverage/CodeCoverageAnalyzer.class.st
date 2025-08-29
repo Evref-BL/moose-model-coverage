@@ -24,7 +24,7 @@ CodeCoverageAnalyzer class >> example [
 { #category : 'actions' }
 CodeCoverageAnalyzer class >> runCoverageForModel: aMooseModel file: aFileName [
 	| analyzer ui |
-	analyzer := CodeCoverageAnalyzer basicNew initialize.
+	analyzer := CodeCoverageAnalyzer new.
 	analyzer loadModel: aMooseModel file: aFileName.
 	analyzer processAnchors.
 	ui := CoverageUIBuilder new initializeWithAnalyzer: analyzer.
