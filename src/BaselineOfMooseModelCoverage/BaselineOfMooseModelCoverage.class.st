@@ -15,12 +15,16 @@ BaselineOfMooseModelCoverage >> baseline: spec [
 		self defineGroups: spec ]
 ]
 
-{ #category : 'dependencies' }
+{ #category : 'baselines' }
 BaselineOfMooseModelCoverage >> defineDependencies: spec [
-	"donne les ref vers le projet qui se trouve sur un depot distance"
+	"donne les ref vers le projet qui se trouve sur un depot distance.
+	Si Moose est deja charge dans l'image, on utilise la version actuelle et on ne declare pas la dependance : sinon Metacello tente de recharger Moose et ses dependances (ex. Ghost), incompatibles avec Pharo 13, et se bloque."
+
+	self isMooseLoaded ifTrue: [ ^ self ].
 	spec
 		baseline: 'Moose'
-		with: [ spec repository: 'github://moosetechnology/Moose:development/src' ]
+		with: [
+		spec repository: 'github://moosetechnology/Moose:development/src' ]
 ]
 
 { #category : 'groups' }
@@ -30,9 +34,24 @@ BaselineOfMooseModelCoverage >> defineGroups: spec [
 		group: 'default' with: #('MooseModelCoverage')
 ]
 
-{ #category : 'packages' }
+{ #category : 'baselines' }
 BaselineOfMooseModelCoverage >> definePackages: spec [
-	"mentionne l'ensemble des packages requis (ici 1 package)"
-	spec
-		package: 'MooseModelCoverage' with: [ spec requires: #('Moose') ]
+	"mentionne l'ensemble des packages requis (ici 1 package).
+	MooseModelCoverage ne requiert 'Moose' que si Moose n'est pas deja charge (voir defineDependencies:)."
+
+	self isMooseLoaded
+		ifTrue: [ spec package: 'MooseModelCoverage' ]
+		ifFalse: [
+				spec
+					package: 'MooseModelCoverage'
+					with: [ spec requires: #( 'Moose' ) ] ]
+]
+
+{ #category : 'testing' }
+BaselineOfMooseModelCoverage >> isMooseLoaded [
+	"Indique si Moose est deja charge dans l'image.
+	On teste la presence de la classe MooseModel (noyau de Moose) plutot qu'un package ou une baseline : c'est ce dont MooseModelCoverage a reellement besoin, et ca ne depend pas de la maniere dont Moose a ete charge.
+	Cette methode est evaluee au chargement de la baseline (dans baseline:), donc l'etat de l'image est celui du moment du chargement."
+
+	^ self class environment includesKey: #MooseModel
 ]
