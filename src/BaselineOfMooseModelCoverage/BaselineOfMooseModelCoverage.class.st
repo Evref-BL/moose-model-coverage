@@ -29,22 +29,40 @@ BaselineOfMooseModelCoverage >> defineDependencies: spec [
 
 { #category : 'groups' }
 BaselineOfMooseModelCoverage >> defineGroups: spec [
-	"optional if you want to create specifc configuration of your baseline"
+	"default : le code (V1 et V2) ; Tests : les tests correspondants ; all : tout."
+
 	spec
-		group: 'default' with: #('MooseModelCoverage')
+		group: 'default'
+		with: #( 'MooseModelCoverage' 'MooseModelCoverage-V2' );
+		group: 'Tests'
+		with: #( 'MooseModelCoverage-Tests' 'MooseModelCoverage-V2-Tests' );
+		group: 'all' with: #( 'default' 'Tests' )
+]
+
+{ #category : 'baselines' }
+BaselineOfMooseModelCoverage >> definePackage: aPackageName on: spec [
+	"declare un package de code ; il requiert 'Moose' seulement si Moose n'est pas deja charge dans l'image."
+
+	self isMooseLoaded
+		ifTrue: [ spec package: aPackageName ]
+		ifFalse: [
+		spec package: aPackageName with: [ spec requires: #( 'Moose' ) ] ]
 ]
 
 { #category : 'baselines' }
 BaselineOfMooseModelCoverage >> definePackages: spec [
-	"mentionne l'ensemble des packages requis (ici 1 package).
-	MooseModelCoverage ne requiert 'Moose' que si Moose n'est pas deja charge (voir defineDependencies:)."
+	"mentionne l'ensemble des packages requis (ici 4 packages : V1 et V2 du code, avec leurs tests).
+	MooseModelCoverage et MooseModelCoverage-V2 ne requierent 'Moose' que si Moose n'est pas deja charge (voir defineDependencies:).
+	Les packages de tests dependent du package teste, pas de Moose directement."
 
-	self isMooseLoaded
-		ifTrue: [ spec package: 'MooseModelCoverage' ]
-		ifFalse: [
-				spec
-					package: 'MooseModelCoverage'
-					with: [ spec requires: #( 'Moose' ) ] ]
+	self definePackage: 'MooseModelCoverage' on: spec.
+	self definePackage: 'MooseModelCoverage-V2' on: spec.
+	spec
+		package: 'MooseModelCoverage-Tests'
+		with: [ spec requires: #( 'MooseModelCoverage' ) ].
+	spec
+		package: 'MooseModelCoverage-V2-Tests'
+		with: [ spec requires: #( 'MooseModelCoverage-V2' ) ]
 ]
 
 { #category : 'testing' }
