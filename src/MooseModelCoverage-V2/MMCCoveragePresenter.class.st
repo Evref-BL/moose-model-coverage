@@ -3,11 +3,11 @@ I show a file with the text covered by the FileAnchors of a Moose model highligh
 
 Synchronisation tree <-> text: selecting an entity in the tree selects its first region in the text and shows its details; moving the selection or the cursor in the text selects the deepest entity at its start in the tree (unfolding its ancestors), or clears the tree selection when there is none. isSynchronizing prevents loops. Drift trap: selecting an entity in the tree selects its region in the text, and the text announces that selection back; an interval that is exactly a region of the entity selected in the tree is ignored, otherwise Engine (1-50) would be replaced by its attribute starting at the same character.
 
-Layout: nested SpPanedLayouts, two movable dividers (about 0.22 / 0.50 / 0.28 of the width): tree column, text, uncovered zones and details.
+Layout: nested SpPanedLayouts, two movable dividers (about 0.26 / 0.47 / 0.27 of the width): tree column, text, uncovered zones and details. The left panel is 0.26 of the width so that at initialExtent (1300@700) a label of 39 characters plus the icon and the scroll bar fits in the tree table.
 
 Empty states: treeStatusPresenter (between the check box and the tree) shows treeStatusText: no Moose model, or no entity of the model anchored in the file (with the rootFolder). The Whole model check box is disabled without model. A relative path given to #forModel:file: is resolved against the rootFolder of the model.
 
-Example: MMCCoveragePresenter example opens a fictive bank model; newExample answers it not opened.
+Examples (pragma <example>): MMCCoveragePresenter example opens a fictive bank model; newExample answers it not opened. MMCCoveragePresenter multiFileExample opens a multi-file model (sources in sub folders, one file absent from the disk, partial and full coverage, a class and a package without anchor); newMultiFileExample answers it not opened. Its sources are written in a new folder mmc-multifile-example-<UUID> under FileLocator temp, used as rootFolder and NOT deleted.
 
 Known limits
 - Performance in a real window: about 1.4 s to open and 0.3 s to change the file for 60 000 characters / 600 regions; about 4 s and 1.3 s for 200 000 / 2 000; about 11 s and 7 s for 500 000 / 7 000 (removing the Rubric segments with removeAllTextSegmentDecorations is quadratic).
@@ -22,6 +22,8 @@ Automatic switch: selecting in the tree an entity without region in the current 
 Limits: the file list is rebuilt at each file change (labels are recomputed); an unreadable file counts as computed with 0 character in the global summary; the model is not observed (use modelFiles invalidate and rebuild after changing it).
 
 Warning icon in the tree: the tree is a SpTreeTablePresenter (not a SpTreePresenter, which has no columns) with exactly two columns: the text (SpStringTableColumn: treeLabelFor: and treeColorFor:) then the image column (treeIconColumn, SpImageTableColumn) whose evaluation is warningIconFor:. The shared small warning icon (Smalltalk ui icons #smallWarning, 16x16) is drawn at the RIGHT of the name of every entity WITHOUT SourceAnchor (MMCModelNavigator>>hasSourceAnchor:), packages and namespaces included, because such an entity cannot be shown in the text; warningTextFor: gives the explanation ('No source anchor: this entity cannot be shown in the text'). The warning depends neither on the filter mode, nor on the current file. Limit: the icon only signals the ABSENCE of a SourceAnchor, not an invalid anchor nor an anchor to an unreadable or missing file. The file anchors of the model are not listed in the tree in the whole model mode.
+
+Selection after a click that changes the file: the click on a row calls treeSelectionChangedTo:, which switches file and rebuilds the roots, then FastTable reapplies its OLD row index (another entity became selected, and Inspect received it). switchToFile:selecting: therefore also defers (application defer:, run in the next Morphic cycle, no delay) deferTreeRealignmentOn:, which selects the entity again and aligns the selected row of the widget on it (realignTreeSelectionOn:, alignTreeWidgetOn:), inside synchronizingDo: so that nothing echoes.
 "
 Class {
 	#name : 'MMCCoveragePresenter',
@@ -63,6 +65,135 @@ Class {
 	#package : 'MooseModelCoverage-V2'
 }
 
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> addExampleAnchorTo: anEntity file: aFileName interval: anInterval in: aModel [
+	"Give anEntity an indexed file anchor on aFileName at anInterval, and add the anchor to aModel."
+
+	| anchor |
+	anchor := FamixJavaIndexedFileAnchor new.
+	anchor fileName: aFileName.
+	anchor startPos: anInterval first.
+	anchor endPos: anInterval last.
+	aModel add: anchor.
+	anEntity sourceAnchor: anchor
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> addExampleClassNamed: aName in: aPackage to: aModel [
+	"Answer a new class of aModel in aPackage, without anchor."
+
+	| class |
+	class := FamixJavaClass new.
+	class name: aName.
+	class parentPackage: aPackage.
+	aModel add: class.
+	^ class
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> addExampleMethodNamed: aName in: aClass to: aModel [
+	"Answer a new method of aClass added to aModel, without anchor."
+
+	| method |
+	method := FamixJavaMethod new.
+	method name: aName.
+	method parentType: aClass.
+	aModel add: method.
+	^ method
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> addExampleMissingClassNamed: aName in: aPackage to: aModel [
+	"Add a class anchored on src/b/Delta.java, a file referenced by an anchor but not written on the disk (unreadable file)."
+
+	self
+		addExampleAnchorTo:
+		(self addExampleClassNamed: aName in: aPackage to: aModel)
+		file: 'src/b/Delta.java'
+		interval: (1 to: 120)
+		in: aModel
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> alphaExampleText [
+	"Fully covered by the anchor of the class Alpha."
+
+	^ String streamContents: [ :s |
+			  s
+				  nextPutAll: 'public class Alpha {';
+				  lf;
+				  nextPutAll: '    private int value;';
+				  lf;
+				  lf;
+				  nextPutAll: '    public int next() {';
+				  lf;
+				  nextPutAll: '        return value + 1;';
+				  lf;
+				  nextPutAll: '    }';
+				  lf;
+				  nextPutAll: '}';
+				  lf ]
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> anchorExampleClass: aClass of: aFileAssociation classEnd: anEndMarker methods: someMethods in: aModel [
+	"Anchor aClass on its file (key: relative name, value: text) from its declaration to anEndMarker (nil: end of the text), and create its methods (associations name -> first text of the method, ending at the first closing brace indented by four spaces)."
+
+	| text |
+	text := aFileAssociation value.
+	self
+		addExampleAnchorTo: aClass
+		file: aFileAssociation key
+		interval: (self
+				 exampleIntervalIn: text
+				 from: 'public class ' , aClass name
+				 to: anEndMarker)
+		in: aModel.
+	someMethods do: [ :each |
+			| method |
+			method := self
+				          addExampleMethodNamed: each key
+				          in: aClass
+				          to: aModel.
+			self
+				addExampleAnchorTo: method
+				file: aFileAssociation key
+				interval:
+				(self exampleIntervalIn: text from: each value to: '    }')
+				in: aModel ]
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> betaExampleText [
+	"Partially covered: the package and import lines and the method unused() are outside every anchor."
+
+	^ String streamContents: [ :s |
+			  s
+				  nextPutAll: 'package demo.a;';
+				  lf;
+				  lf;
+				  nextPutAll: 'import java.util.List;';
+				  lf;
+				  lf;
+				  nextPutAll: 'public class Beta {';
+				  lf;
+				  nextPutAll: '    public int used() {';
+				  lf;
+				  nextPutAll: '        return 1;';
+				  lf;
+				  nextPutAll: '    }';
+				  lf;
+				  lf;
+				  nextPutAll: '    public int unused() {';
+				  lf;
+				  nextPutAll: '        return 2;';
+				  lf;
+				  nextPutAll: '    }';
+				  lf;
+				  nextPutAll: '}';
+				  lf ]
+]
+
 { #category : 'instance creation' }
 MMCCoveragePresenter class >> emptyCoverage [
 	"Answer the coverage shown when there is no file to show (unreadable)."
@@ -79,6 +210,7 @@ MMCCoveragePresenter class >> emptyCoverage [
 MMCCoveragePresenter class >> example [
 	"Open the fictive example (see #newExample) and answer the presenter."
 
+	<example>
 	^ self newExample
 		  open;
 		  yourself
@@ -119,6 +251,66 @@ MMCCoveragePresenter class >> exampleEntitiesFor: aText [
 					 parentType: entity;
 					 yourself) -> (span value: (each at: 2) value: (each at: 3)) ].
 	^ entities
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> exampleFiles [
+	"Answer the sources written on the disk by the multi-file example: associations relative name -> text. src/b/Delta.java is referenced by an anchor but deliberately not written (unreadable file)."
+
+	^ {
+		  ('src/a/Alpha.java' -> self alphaExampleText).
+		  ('src/a/Beta.java' -> self betaExampleText).
+		  ('src/b/Gamma.java' -> self gammaExampleText) }
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> exampleIntervalIn: aText from: aStartMarker to: anEndMarker [
+	"Answer the interval (1 based, inclusive) of aText from the first occurrence of aStartMarker to the end of the first occurrence of anEndMarker after it, or to the end of aText when anEndMarker is nil."
+
+	| start end |
+	start := aText indexOfSubCollection: aStartMarker.
+	end := anEndMarker ifNil: [ aText size ] ifNotNil: [
+			       (aText indexOfSubCollection: anEndMarker startingAt: start)
+			       + anEndMarker size - 1 ].
+	^ start to: end
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> exampleModelIn: aFolder [
+	"Answer a FamixJavaModel whose rootFolder is aFolder: the package demo (without anchor) holding the anchored classes Alpha (fully covered), Beta (partially covered, its method unused has no anchor), Gamma, Delta (file absent from the disk) and Orphan, a class without anchor."
+
+	| aModel package files beta |
+	aModel := FamixJavaModel new.
+	aModel rootFolder: aFolder asFileReference.
+	package := FamixJavaPackage new.
+	package name: 'demo'.
+	aModel add: package.
+	files := self exampleFiles.
+	self
+		anchorExampleClass:
+		(self addExampleClassNamed: 'Alpha' in: package to: aModel)
+		of: files first
+		classEnd: nil
+		methods: { ('next' -> 'public int next()') }
+		in: aModel.
+	beta := self addExampleClassNamed: 'Beta' in: package to: aModel.
+	self
+		anchorExampleClass: beta
+		of: (files at: 2)
+		classEnd: '    }'
+		methods: { ('used' -> 'public int used()') }
+		in: aModel.
+	self addExampleMethodNamed: 'unused' in: beta to: aModel.
+	self
+		anchorExampleClass:
+		(self addExampleClassNamed: 'Gamma' in: package to: aModel)
+		of: files last
+		classEnd: nil
+		methods: { ('run' -> 'public void run()') }
+		in: aModel.
+	self addExampleMissingClassNamed: 'Delta' in: package to: aModel.
+	self addExampleClassNamed: 'Orphan' in: package to: aModel.
+	^ aModel
 ]
 
 { #category : 'examples' }
@@ -176,6 +368,37 @@ MMCCoveragePresenter class >> forModel: aModel file: aFileReferenceOrString [
 		  model: aModel
 ]
 
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> gammaExampleText [
+	"Covered by the anchor of the class Gamma, except the package line."
+
+	^ String streamContents: [ :s |
+			  s
+				  nextPutAll: 'package demo.b;';
+				  lf;
+				  lf;
+				  nextPutAll: 'public class Gamma {';
+				  lf;
+				  nextPutAll: '    public void run() {';
+				  lf;
+				  nextPutAll: '        System.out.println("Gamma");';
+				  lf;
+				  nextPutAll: '    }';
+				  lf;
+				  nextPutAll: '}';
+				  lf ]
+]
+
+{ #category : 'examples' }
+MMCCoveragePresenter class >> multiFileExample [
+	"Open the presenter of #newMultiFileExample (file by file navigation on several sources, see its comment for the temporary folder) and answer it."
+
+	<example>
+	^ self newMultiFileExample
+		  open;
+		  yourself
+]
+
 { #category : 'instance creation' }
 MMCCoveragePresenter class >> newApplication: anApplication model: aCoverage [
 	"Standard Spec2 construction: the coverage is set before the widgets are initialized."
@@ -205,8 +428,8 @@ MMCCoveragePresenter class >> newExample [
 	aModel := FamixJavaModel new.
 	aModel add: entries first key parentPackage.
 	entries do: [ :each | aModel add: each key ].
-	regions := entries collect: [ :each |
-			           MMCEntityRegion
+	regions := entries collect: [ :each |       
+				 MMCEntityRegion
 				           entity: each key
 				           anchor: nil
 				           interval: each value
@@ -220,6 +443,21 @@ MMCCoveragePresenter class >> newExample [
 					    ignoredAnchors: #(  )
 					    otherFileAnchorCount: 0))
 		  model: aModel
+]
+
+{ #category : 'examples' }
+MMCCoveragePresenter class >> newMultiFileExample [
+	"Answer a not opened presenter with the inventory of the files (modelFiles) of a fictive FamixJavaModel: four anchored files src/a/Alpha.java (fully covered), src/a/Beta.java (partially covered), src/b/Gamma.java and src/b/Delta.java (referenced by an anchor but absent from the disk: unreadable, warning sign), classes and methods with indexed file anchors, the class Orphan and the package demo without anchor (warning icon in the whole model mode). The sources are written in a NEW temporary folder under FileLocator temp, named mmc-multifile-example-<UUID> and used as rootFolder of the model. It is not deleted (the files must stay readable while the window is open): remove it by hand when needed. Each call builds an independent presenter, model, inventory and folder."
+
+	| folder aModel |
+	folder := (FileLocator temp
+	           / ('mmc-multifile-example-' , UUID new asString))
+		          asFileReference.
+	folder ensureCreateDirectory.
+	self exampleFiles do: [ :each |
+		self writeExampleFile: each in: folder ].
+	aModel := self exampleModelIn: folder.
+	^ self forInventoryOn: aModel file: self exampleFiles first key
 ]
 
 { #category : 'instance creation' }
@@ -313,6 +551,33 @@ MMCCoveragePresenter class >> resolveFile: aFileReferenceOrString in: aModel [
 	^ candidate isFile
 		  ifTrue: [ candidate ]
 		  ifFalse: [ aFileReferenceOrString ]
+]
+
+{ #category : 'examples - private' }
+MMCCoveragePresenter class >> writeExampleFile: anAssociation in: aFolder [
+	"Write the text (value) in the file of relative name (key) under aFolder, creating the sub folders."
+
+	| ref |
+	ref := aFolder resolve: anAssociation key.
+	ref parent ensureCreateDirectory.
+	ref ensureDelete.
+	ref binaryWriteStreamDo: [ :stream |
+		stream nextPutAll: anAssociation value utf8Encoded ]
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> alignTreeWidgetOn: anEntity [
+	"Make the row selected in the FastTable widget the row of anEntity. After a file switch triggered by a real click, FastTable reapplies its OLD row index on the rebuilt tree, so the visible selection (and the Spec selection that follows it) is another entity. Does nothing without widget or when anEntity has no row."
+
+	| table source row |
+	anEntity ifNil: [ ^ self ].
+	treePresenter hasAdapter ifFalse: [ ^ self ].
+	table := treePresenter adapter widget.
+	source := table dataSource.
+	row := (1 to: source numberOfRows)
+		       detect: [ :each | (source elementAt: each) data == anEntity ]
+		       ifNone: [ ^ self ].
+	table selectedIndex = row ifFalse: [ table selectIndex: row ]
 ]
 
 { #category : 'updating' }
@@ -515,12 +780,12 @@ MMCCoveragePresenter >> decorators [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> defaultLayout [
-	"Summary on top; below, three columns separated by two movable dividers (nested paned layouts): the left column (file selector above the tree of the model), the highlighted text, and the uncovered zones above the details. The sliders give about 0.22 / 0.50 / 0.28 of the width."
+	"Summary on top; below, three columns separated by two movable dividers (nested paned layouts): the left column (file selector above the tree of the model), the highlighted text, and the uncovered zones above the details. The sliders give about 0.26 / 0.47 / 0.27 of the width (at initialExtent the tree table is about 320 px wide: a label of 39 characters fits)."
 
 	^ SpBoxLayout newTopToBottom
 		  add: summaryPresenter expand: false;
 		  add: (SpPanedLayout newLeftToRight
-				   positionOfSlider: 0.22;
+				   positionOfSlider: 0.26;
 				   first: self treeColumnLayout;
 				   second: (SpPanedLayout newLeftToRight
 						    positionOfSlider: 0.64;
@@ -532,6 +797,17 @@ MMCCoveragePresenter >> defaultLayout [
 						    yourself);
 				   yourself);
 		  yourself
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> deferTreeRealignmentOn: anEntity [
+	"A real click selects the row, our callback rebuilds the tree, and FastTable then reapplies its old row index. Realign the selection when the event is over, as a deferred UI message of the application (next Morphic cycle, no delay)."
+
+	anEntity ifNil: [ ^ self ].
+	treePresenter hasAdapter ifFalse: [ ^ self ].
+	self application defer: [
+		self isSynchronizing ifFalse: [
+			self realignTreeSelectionOn: anEntity ] ]
 ]
 
 { #category : 'accessing' }
@@ -1005,6 +1281,15 @@ MMCCoveragePresenter >> putUncoveredDetailsAt: aPosition on: aStream [
 					print: zone interval last ]
 ]
 
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> realignTreeSelectionOn: anEntity [
+	"Select anEntity again in the tree and align the FastTable row on it, without echo. Used once the click event is over (see deferTreeRealignmentOn:)."
+
+	self synchronizingDo: [
+			self selectPathOf: anEntity.
+			self alignTreeWidgetOn: anEntity ]
+]
+
 { #category : 'files' }
 MMCCoveragePresenter >> refreshFileButtons [
 	"Enable the file widgets when there is an inventory, the navigation buttons according to the rank of the current file."
@@ -1247,14 +1532,15 @@ MMCCoveragePresenter >> summaryText [
 
 { #category : 'files' }
 MMCCoveragePresenter >> switchToFile: aFile selecting: anEntity [
-	"Show aFile, then select the first region of anEntity in the text and the entity in the tree, without echo."
+	"Show aFile, then select the first region of anEntity in the text and the entity in the tree, without echo. The row of the FastTable is realigned once the click event is over (see deferTreeRealignmentOn:)."
 
 	self synchronizingDo: [
 			self showFile: aFile.
 			self selectEntityInTree: anEntity.
 			(navigator firstRegionOf: anEntity) ifNotNil: [ :region |
 				textPresenter selectionInterval: region interval ].
-			detailsPresenter text: (self detailsTextFor: anEntity) ]
+			detailsPresenter text: (self detailsTextFor: anEntity) ].
+	self deferTreeRealignmentOn: anEntity
 ]
 
 { #category : 'tree' }
