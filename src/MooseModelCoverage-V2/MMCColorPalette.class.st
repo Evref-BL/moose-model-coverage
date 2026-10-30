@@ -1,12 +1,14 @@
 "
-Opaque colors per entity type name and nesting depth (0 to 3) for a light or dark theme, readable with the theme text color. Hues avoid red, which is reserved for uncovered zones.
+Opaque colors per entity type name and nesting depth (0 to 3) for a light or dark theme, readable with the theme text color. Hues avoid red, which is reserved for uncovered zones. A palette is immutable once created: colors are memoized per palette (key: resolved type index, 0 for unknown types, and depth capped to 0..3) and the same Color instance is answered at every call. Callers must not mutate the answered colors (the only sender of colorForSegment:, MMCCoveragePresenter>>buildDecorators, does not).
 "
 Class {
 	#name : 'MMCColorPalette',
 	#superclass : 'Object',
 	#instVars : [
 		'theme',
-		'typeNames'
+		'typeNames',
+		'colorCache',
+		'classColors'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -30,24 +32,37 @@ MMCColorPalette class >> themeForBackground: aColor [
 
 { #category : 'accessing' }
 MMCColorPalette >> colorForSegment: aSegment [
+	"Answer the uncovered color for an uncovered segment, else the color of the type and depth of the segment. The type name only depends on the class of the entity, so the colors are also memoized per entity class and capped depth."
 
-	^ aSegment isUncovered
-		  ifTrue: [ self uncoveredColor ]
-		  ifFalse: [
-		  self colorForType: aSegment typeName depth: aSegment depth ]
+	| levels level |
+	aSegment isUncovered ifTrue: [ ^ self uncoveredColor ].
+	level := ((aSegment depth ifNil: [ 0 ]) max: 0) min: 3.
+	levels := (classColors ifNil: [
+		           classColors := IdentityDictionary new ])
+		          at: aSegment region entity class
+		          ifAbsentPut: [ Array new: 4 ].
+	^ (levels at: level + 1) ifNil: [
+			  levels
+				  at: level + 1
+				  put: (self colorForType: aSegment typeName depth: level) ]
 ]
 
 { #category : 'accessing' }
 MMCColorPalette >> colorForType: aTypeName depth: anInteger [
-	"Answer the opaque color of the type at the depth (capped between 0 and 3); a neutral grey when the type is unknown."
+	"Answer the opaque color of the type at the depth (capped between 0 and 3); a neutral grey when the type is unknown. Colors are computed once per palette (key: resolved type index and capped depth) and shared between calls."
 
 	| level index |
 	level := ((anInteger ifNil: [ 0 ]) max: 0) min: 3.
 	index := aTypeName
 		         ifNil: [ 0 ]
 		         ifNotNil: [ typeNames indexOf: aTypeName ].
-	index = 0 ifTrue: [ ^ self greyAtLevel: level ].
-	^ self colorOfHue: (self hueOfIndex: index) level: level
+	^ (colorCache ifNil: [ colorCache := Dictionary new ])
+		  at: index * 4 + level
+		  ifAbsentPut: [
+				  index = 0
+					  ifTrue: [ self greyAtLevel: level ]
+					  ifFalse: [
+					  self colorOfHue: (self hueOfIndex: index) level: level ] ]
 ]
 
 { #category : 'private' }
@@ -114,7 +129,9 @@ MMCColorPalette >> setTypeNames: aCollection theme: aSymbol [
 				  , ' (expected #light or #dark)' ].
 	theme := aSymbol.
 	typeNames := (aCollection reject: [ :each | each isNil ]) asSet
-		             asSortedCollection asArray
+		             asSortedCollection asArray.
+	colorCache := Dictionary new.
+	classColors := IdentityDictionary new
 ]
 
 { #category : 'accessing' }

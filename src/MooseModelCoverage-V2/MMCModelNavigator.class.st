@@ -1,5 +1,5 @@
 "
-Pure navigation model over a Moose model and an MMCFileCoverage: roots, children, parent, index paths and entity <-> region links, for a tree widget. The index is built lazily once per (filter, nameFilter). Filter #covered shows entities with a region plus their ancestors; #all shows every entity of the model. A name filter keeps matching entities plus their ancestors. Parent of an entity is the first of its containers, so each entity appears once.
+Pure navigation model over a Moose model and an MMCFileCoverage: roots, children, parent, index paths and entity <-> region links, for a tree widget. The index is built lazily once per (filter, nameFilter). Filter #covered shows entities with a region plus their ancestors; #all shows every entity of the model. A name filter keeps matching entities plus their ancestors. Parent of an entity is the first of its containers, so each entity appears once. Ancestors outside the model are deliberately shown: the ancestors of an entity are always included, even when their container is not in the model (same in #covered and #all modes). Siblings and roots are sorted by first region position, then by label ignoring case, then by mooseName, then by exact label.
 "
 Class {
 	#name : 'MMCModelNavigator',
@@ -110,6 +110,38 @@ MMCModelNavigator >> childrenOf: anEntity [
 	^ (childrenByParent at: anEntity ifAbsent: [ #(  ) ]) copy
 ]
 
+{ #category : 'private' }
+MMCModelNavigator >> compare: a with: b keys: keys [
+	"Answer -1, 0 or 1 comparing two entities by start position, label ignoring case, mooseName, then exact label."
+
+	| ka kb result |
+	ka := keys at: a.
+	kb := keys at: b.
+	ka first = kb first ifFalse: [
+			^ ka first < kb first
+				  ifTrue: [ -1 ]
+				  ifFalse: [ 1 ] ].
+	result := self
+		          compareString: ka second asString asLowercase
+		          with: kb second asString asLowercase.
+	result = 0 ifFalse: [ ^ result ].
+	result := self
+		          compareString: (self mooseNameOf: a)
+		          with: (self mooseNameOf: b).
+	result = 0 ifFalse: [ ^ result ].
+	^ self compareString: ka second asString with: kb second asString
+]
+
+{ #category : 'private' }
+MMCModelNavigator >> compareString: x with: y [
+	"Answer -1, 0 or 1 comparing two strings case-sensitively (total order)."
+
+	x = y ifTrue: [ ^ 0 ].
+	^ (x caseSensitiveLessOrEqual: y)
+		  ifTrue: [ -1 ]
+		  ifFalse: [ 1 ]
+]
+
 { #category : 'accessing' }
 MMCModelNavigator >> coverage [
 
@@ -146,10 +178,14 @@ MMCModelNavigator >> entitiesAt: aPosition [
 
 { #category : 'navigation' }
 MMCModelNavigator >> entityAtPath: aPath [
-	"Answer the entity reached by following the 1-based indices of aPath from the roots, or nil when the path is empty or invalid."
+	"Answer the entity reached by following the 1-based indices of aPath from the roots, or nil when the path is empty or invalid (not a collection of positive integers)."
 
 	| list entity |
-	aPath isEmptyOrNil ifTrue: [ ^ nil ].
+	(aPath isCollection and: [
+			 aPath isDictionary not and: [
+				 aPath isSymbol not and: [ aPath isString not ] ] ]) ifFalse: [
+		^ nil ].
+	aPath isEmpty ifTrue: [ ^ nil ].
 	self ensureIndex.
 	list := rootEntities.
 	aPath do: [ :i |
@@ -377,19 +413,10 @@ MMCModelNavigator >> size [
 
 { #category : 'private' }
 MMCModelNavigator >> sorted: aCollection keys: keys [
-	"Answer an Array of aCollection sorted by start position, label, then mooseName."
+	"Answer an Array of aCollection sorted by start position (first region, infinity without region), then by label ignoring case, then by mooseName, then by exact label (case), so the order is deterministic."
 
 	^ (aCollection asSortedCollection: [ :a :b |
-			   | ka kb |
-			   ka := keys at: a.
-			   kb := keys at: b.
-			   ka first ~= kb first
-				   ifTrue: [ ka first < kb first ]
-				   ifFalse: [
-						   ka second ~= kb second
-							   ifTrue: [ ka second < kb second ]
-							   ifFalse: [ (self mooseNameOf: a) <= (self mooseNameOf: b) ] ] ])
-		  asArray
+		   (self compare: a with: b keys: keys) <= 0 ]) asArray
 ]
 
 { #category : 'private' }

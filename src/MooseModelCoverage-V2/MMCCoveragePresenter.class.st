@@ -14,6 +14,7 @@ Known limits
 - The highlight colors are chosen when the window opens, from the background of the text widget. A change of Pharo theme while the window is open is not followed: use applyTheme:.
 - A real mouse click was not automated: the cursor tracking and the synchronisation are verified by programmatic Rubric selection.
 - Selecting in the tree an entity without region in this file does not move the text (the details say so).
+Tree context menu ""Inspect"" (right click): opens the Pharo inspector on the selected entity (entity inspect); the action is injectable with inspectAction:.
 "
 Class {
 	#name : 'MMCCoveragePresenter',
@@ -38,7 +39,8 @@ Class {
 		'isUpdatingToggle',
 		'isSynchronizing',
 		'treeStatusPresenter',
-		'treeStatusText'
+		'treeStatusText',
+		'inspectAction'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -288,13 +290,14 @@ MMCCoveragePresenter >> buildPalette [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> buildTreePresenter [
-	"Create the tree of the Moose model (the roots are set by #refreshTree), its check box and its status label."
+	"Create the tree of the Moose model (the roots are set by #refreshTree), its check box and its status label. The context menu is a block: a fresh menu is built at each popup."
 
 	treePresenter := self instantiate: SpTreePresenter.
 	treePresenter
 		children: [ :each | navigator childrenOf: each ];
 		display: [ :each | self treeLabelFor: each ];
-		displayColor: [ :each | self treeColorFor: each ].
+		displayColor: [ :each | self treeColorFor: each ];
+		contextMenu: [ self treeContextMenu ].
 	wholeModelTogglePresenter := self newCheckBox.
 	wholeModelTogglePresenter label: 'Whole model'.
 	treeStatusPresenter := self newLabel.
@@ -489,6 +492,31 @@ MMCCoveragePresenter >> initializeWindow: aWindowPresenter [
 
 	super initializeWindow: aWindowPresenter.
 	aWindowPresenter initialExtent: self initialExtent
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> inspectAction [
+	"Answer the one-argument block evaluated with the entity to inspect (default: open the Pharo inspector)."
+
+	^ inspectAction ifNil: [
+		  inspectAction := [ :entity | entity inspect ] ]
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> inspectAction: aBlock [
+	"Set the one-argument block evaluated by the Inspect menu item with the selected entity."
+
+	inspectAction := aBlock
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> inspectTreeEntity [
+	"Inspect the entity selected in the tree with the inspect action; do nothing without selection. Selections and synchronization state are untouched."
+
+	| entity |
+	entity := self selectedEntityInTree.
+	entity ifNil: [ ^ self ].
+	self inspectAction value: entity
 ]
 
 { #category : 'synchronisation' }
@@ -791,9 +819,10 @@ MMCCoveragePresenter >> textPresenter [
 
 { #category : 'synchronisation' }
 MMCCoveragePresenter >> textSelectionChangedTo: anInterval [
-	"The text selection changed: select in the tree the deepest entity at the start of anInterval and show its details; when there is none, clear the tree selection and show the details of the position. An interval that is exactly a region of the selected entity is the echo of the tree selection: ignored (Engine and its attribute share the same first character)."
+	"The text selection changed: select in the tree the deepest entity at the start of anInterval and show its details; when there is none, clear the tree selection and show the details of the position. A nil interval is ignored. An interval that is exactly a region of the selected entity is the echo of the tree selection: ignored (Engine and its attribute share the same first character)."
 
 	| position entity |
+	anInterval ifNil: [ ^ self ].
 	self isSynchronizing ifTrue: [ ^ self ].
 	fileCoverage isReadable ifFalse: [ ^ self ].
 	(self isEchoOfTreeSelection: anInterval) ifTrue: [ ^ self ].
@@ -849,6 +878,21 @@ MMCCoveragePresenter >> treeColorFor: anEntity [
 	^ (navigator isCovered: anEntity)
 		  ifTrue: [ nil ]
 		  ifFalse: [ self uncoveredTreeColor ]
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> treeContextMenu [
+	"Answer a new menu with the only item Inspect, enabled when an entity is selected in the tree (a right click selects the row first)."
+
+	| menu |
+	menu := SpMenuPresenter new.
+	menu addGroup: [ :group |
+			group addItem: [ :item |
+					item
+						name: 'Inspect';
+						enabled: self selectedEntityInTree notNil;
+						action: [ self inspectTreeEntity ] ] ].
+	^ menu
 ]
 
 { #category : 'accessing' }
