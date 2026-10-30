@@ -1,5 +1,5 @@
 "
-Pure navigation model over a Moose model and an MMCFileCoverage: roots, children, parent, index paths and entity <-> region links, for a tree widget. The index is built lazily once per (filter, nameFilter). Filter #covered shows entities with a region plus their ancestors; #all shows every entity of the model. A name filter keeps matching entities plus their ancestors. Parent of an entity is the first of its containers, so each entity appears once. Ancestors outside the model are deliberately shown: the ancestors of an entity are always included, even when their container is not in the model (same in #covered and #all modes). Siblings and roots are sorted by first region position, then by label ignoring case, then by mooseName, then by exact label.
+Pure navigation model over a Moose model and an MMCFileCoverage: roots, children, parent, index paths and entity <-> region links, for a tree widget. The index is built lazily once per (filter, nameFilter). Filter #covered shows entities with a region plus their ancestors; #all shows every entity of the model. A name filter keeps matching entities plus their ancestors. Parent of an entity is the first of its containers, so each entity appears once. Ancestors outside the model are deliberately shown: the ancestors of an entity are always included, even when their container is not in the model (same in #covered and #all modes). Siblings and roots are sorted by first region position, then by label ignoring case, then by mooseName, then by exact label. hasSourceAnchor: tells whether an entity has a SourceAnchor (false for nil or an object without sourceAnchor). The file anchors themselves are not listed in the #all mode.
 "
 Class {
 	#name : 'MMCModelNavigator',
@@ -89,12 +89,15 @@ MMCModelNavigator >> buildTree [
 
 { #category : 'private' }
 MMCModelNavigator >> candidateEntities [
-	"Entities selected by the current filter and name filter, before adding their ancestors."
+	"Entities selected by the current filter and name filter, before adding their ancestors. The file anchors of the model are not shown in #all: they are not entities of the code and have no source anchor of their own."
 
 	| base |
 	model ifNil: [ ^ #(  ) ].
 	base := filter = #all
-		        ifTrue: [ model allModelEntities ]
+		        ifTrue: [
+				        model allModelEntities reject: [ :each |
+					        (each respondsTo: #isFileAnchor) and: [
+						        each isFileAnchor ] ] ]
 		        ifFalse: [ regionsByEntity keys ].
 	nameFilter isEmpty ifTrue: [ ^ base ].
 	^ base select: [ :each |
@@ -256,6 +259,14 @@ MMCModelNavigator >> groupRegions [
 				add: region ].
 	dict keys do: [ :key | dict at: key put: (dict at: key) asArray ].
 	^ dict
+]
+
+{ #category : 'source anchor' }
+MMCModelNavigator >> hasSourceAnchor: anEntity [
+	"Answer true when anEntity has a SourceAnchor (not nil). Answer false, without error, for nil or an object that does not understand #sourceAnchor."
+
+	^ (anEntity respondsTo: #sourceAnchor) and: [
+		  anEntity sourceAnchor isNotNil ]
 ]
 
 { #category : 'accessing' }

@@ -20,6 +20,8 @@ File by file navigation (with inventory): #forModel: and #openOn: (and #openOn:f
 Automatic switch: selecting in the tree an entity without region in the current file switches to the first file of filesOf: where it has a region and selects the region (nothing moves when it has no region anywhere). The tree selection is kept after a file change when its entity is still visible.
 #on:, #on:model: and #forModel:file: build a presenter WITHOUT inventory: modelFiles and currentFile are nil, the file widgets are disabled, windowTitleText is Coverage and the file navigation messages do nothing.
 Limits: the file list is rebuilt at each file change (labels are recomputed); an unreadable file counts as computed with 0 character in the global summary; the model is not observed (use modelFiles invalidate and rebuild after changing it).
+
+Warning icon in the tree: the tree is a SpTreeTablePresenter (not a SpTreePresenter, which has no columns) with exactly two columns: the text (SpStringTableColumn: treeLabelFor: and treeColorFor:) then the image column (treeIconColumn, SpImageTableColumn) whose evaluation is warningIconFor:. The shared small warning icon (Smalltalk ui icons #smallWarning, 16x16) is drawn at the RIGHT of the name of every entity WITHOUT SourceAnchor (MMCModelNavigator>>hasSourceAnchor:), packages and namespaces included, because such an entity cannot be shown in the text; warningTextFor: gives the explanation ('No source anchor: this entity cannot be shown in the text'). The warning depends neither on the filter mode, nor on the current file. Limit: the icon only signals the ABSENCE of a SourceAnchor, not an invalid anchor nor an anchor to an unreadable or missing file. The file anchors of the model are not listed in the tree in the whole model mode.
 "
 Class {
 	#name : 'MMCCoveragePresenter',
@@ -407,14 +409,23 @@ MMCCoveragePresenter >> buildPalette [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> buildTreePresenter [
-	"Create the tree of the Moose model (the roots are set by #refreshTree), its check box and its status label. The context menu is a block: a fresh menu is built at each popup."
+	"Create the tree table of the Moose model (the roots are set by #refreshTree), its check box and its status label. Two columns: the text (label and color) then the warning icon, at the right of the name, of the entities without SourceAnchor. The context menu is a block: a fresh menu is built at each popup."
 
-	treePresenter := self instantiate: SpTreePresenter.
+	treePresenter := self instantiate: SpTreeTablePresenter.
 	treePresenter
+		addColumn: (SpStringTableColumn new
+				 title: 'Entity';
+				 evaluated: [ :each | self treeLabelFor: each ];
+				 displayColor: [ :each | self treeColorFor: each ];
+				 yourself);
+		addColumn: (SpImageTableColumn new
+				 title: '';
+				 evaluated: [ :each | self warningIconFor: each ];
+				 width: 20;
+				 yourself);
 		children: [ :each | navigator childrenOf: each ];
-		display: [ :each | self treeLabelFor: each ];
-		displayColor: [ :each | self treeColorFor: each ];
 		contextMenu: [ self treeContextMenu ].
+	treePresenter hideColumnHeaders.
 	wholeModelTogglePresenter := self newCheckBox.
 	wholeModelTogglePresenter label: 'Whole model'.
 	treeStatusPresenter := self newLabel.
@@ -1384,6 +1395,13 @@ MMCCoveragePresenter >> treeFilter: aSymbol [
 ]
 
 { #category : 'tree' }
+MMCCoveragePresenter >> treeIconColumn [
+	"Answer the image column of the tree (the second and last one): the warning icon at the right of the name."
+
+	^ treePresenter columns last
+]
+
+{ #category : 'tree' }
 MMCCoveragePresenter >> treeLabelFor: anEntity [
 	"Answer '<type> <label>' for anEntity."
 
@@ -1511,6 +1529,25 @@ MMCCoveragePresenter >> visibleFiles [
 	^ modelFiles files select: [ :each |
 			  (modelFiles relativeNameOf: each) asLowercase includesSubstring:
 				  pattern ]
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> warningIconFor: anEntity [
+	"Answer the shared small warning icon when anEntity has no SourceAnchor (it cannot be shown in the text), nil otherwise."
+
+	^ (navigator hasSourceAnchor: anEntity)
+		  ifTrue: [ nil ]
+		  ifFalse: [ Smalltalk ui icons iconNamed: #smallWarning ]
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> warningTextFor: anEntity [
+	"Answer the tooltip text of the warning icon of anEntity, nil when it has a SourceAnchor."
+
+	^ (navigator hasSourceAnchor: anEntity)
+		  ifTrue: [ nil ]
+		  ifFalse: [
+		  'No source anchor: this entity cannot be shown in the text' ]
 ]
 
 { #category : 'accessing' }

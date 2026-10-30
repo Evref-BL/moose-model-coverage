@@ -639,13 +639,13 @@ MMCCoveragePresenterTreeTest >> testTreeColorOfCoveredEntityStaysNilInAllMode [
 
 { #category : 'tests' }
 MMCCoveragePresenterTreeTest >> testTreeDisplayBlockShowsTheTreeLabel [
-	"The label shown by the tree widget is the one of treeLabelFor:."
+	"The label shown by the tree widget (evaluation of its first column) is the one of treeLabelFor:."
 
 	| presenter |
 	presenter := self newPresenter.
 	self
-		assert:
-		(presenter treePresenter display value: (self small: #alpha))
+		assert: (presenter treePresenter columns first evaluation value:
+				 (self small: #alpha))
 		equals: (presenter treeLabelFor: (self small: #alpha))
 ]
 
@@ -757,7 +757,8 @@ MMCCoveragePresenterTreeTest >> testTreeIsEmptyWithoutModel [
 
 	| presenter |
 	presenter := self presenterClass on: self zonesCoverage.
-	self assert: (presenter treePresenter isKindOf: SpTreePresenter).
+	self assert:
+		(presenter treePresenter isKindOf: SpAbstractTreePresenter).
 	self assert: presenter treePresenter roots isEmpty
 ]
 
@@ -827,7 +828,8 @@ MMCCoveragePresenterTreeTest >> testTreePresenterIsASpTreePresenterAndToggleAChe
 
 	| presenter |
 	presenter := self newPresenter.
-	self assert: (presenter treePresenter isKindOf: SpTreePresenter).
+	self assert:
+		(presenter treePresenter isKindOf: SpAbstractTreePresenter).
 	self assert:
 		(presenter wholeModelTogglePresenter isKindOf: SpCheckBoxPresenter)
 ]
