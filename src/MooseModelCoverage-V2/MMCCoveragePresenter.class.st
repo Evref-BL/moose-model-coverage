@@ -3,7 +3,7 @@ I show a file with the text covered by the FileAnchors of a Moose model highligh
 
 Synchronisation tree <-> text: selecting an entity in the tree selects its first region in the text and shows its details; moving the selection or the cursor in the text selects the deepest entity at its start in the tree (unfolding its ancestors), or clears the tree selection when there is none. isSynchronizing prevents loops. Drift trap: selecting an entity in the tree selects its region in the text, and the text announces that selection back; an interval that is exactly a region of the entity selected in the tree is ignored, otherwise Engine (1-50) would be replaced by its attribute starting at the same character.
 
-Layout: nested SpPanedLayouts, two movable dividers (about 0.26 / 0.47 / 0.27 of the width): tree column, text, uncovered zones and details. The left panel is 0.26 of the width so that at initialExtent (1300@700) a label of 39 characters plus the icon and the scroll bar fits in the tree table.
+Layout: nested SpPanedLayouts, two movable dividers (about 0.27 / 0.47 / 0.26 of the width): tree column, text, uncovered zones and details. The left panel is 0.27 of the width (the titled frames take a few pixels of the tree) so that at initialExtent (1300@700) a label of 39 characters plus the icon and the scroll bar fits in the tree table.
 
 Empty states: treeStatusPresenter (between the check box and the tree) shows treeStatusText: no Moose model, or no entity of the model anchored in the file (with the rootFolder). The Whole model check box is disabled without model. A relative path given to #forModel:file: is resolved against the rootFolder of the model.
 
@@ -24,6 +24,11 @@ Limits: the file list is rebuilt at each file change (labels are recomputed); an
 Warning icon in the tree: the tree is a SpTreeTablePresenter (not a SpTreePresenter, which has no columns) with exactly two columns: the text (SpStringTableColumn: treeLabelFor: and treeColorFor:) then the image column (treeIconColumn, SpImageTableColumn) whose evaluation is warningIconFor:. The shared small warning icon (Smalltalk ui icons #smallWarning, 16x16) is drawn at the RIGHT of the name of every entity WITHOUT SourceAnchor (MMCModelNavigator>>hasSourceAnchor:), packages and namespaces included, because such an entity cannot be shown in the text; warningTextFor: gives the explanation ('No source anchor: this entity cannot be shown in the text'). The warning depends neither on the filter mode, nor on the current file. Limit: the icon only signals the ABSENCE of a SourceAnchor, not an invalid anchor nor an anchor to an unreadable or missing file. The file anchors of the model are not listed in the tree in the whole model mode.
 
 Selection after a click that changes the file: the click on a row calls treeSelectionChangedTo:, which switches file and rebuilds the roots, then FastTable reapplies its OLD row index (another entity became selected, and Inspect received it). switchToFile:selecting: therefore also defers (application defer:, run in the next Morphic cycle, no delay) deferTreeRealignmentOn:, which selects the entity again and aligns the selected row of the widget on it (realignTreeSelectionOn:, alignTreeWidgetOn:), inside synchronizingDo: so that nothing echoes.
+
+Panel titles: panelTitles answers #('Summary' 'Files' 'Model' 'Source text' 'Uncovered zones' 'Details'), the visible titles in display order. Each leaf widget (summary, file list, tree, text, uncovered zones, details) is wrapped by titled:around: in an SpFrameLayout whose label is drawn in a strip above the panel (SpMorphicFrameLayoutMorph); the outer SpPanedLayouts are unchanged. The Files frame is 172 px high (150 for the list plus the title strip), the summary 44 px. The Files title stays when there is no inventory (list disabled).
+
+Tree context menu, second item ""Open source file in file manager"": sourceFileOf: answers the canonical FileReference of the source file of an entity (with inventory: currentFile when the entity has a file there, else modelFiles fileOf:; without inventory: its file anchor resolved against the rootFolder of the model; nil when absent from the disk, without model or for anything that is not an entity); the item is disabled when it is nil. openSourceFileOfTreeEntity evaluates openFileAction (injectable with openFileAction:) with that file; it does nothing without selection or file. Native opening (default, revealInFileManager:, never run by the tests): macOS LibC runCommand: 'open -R <path>' (the Finder shows the file selected), Windows 'explorer /select,<path>', other platforms openInOSFileBrowser on the parent folder. The command is built by the pure nativeRevealCommandFor:platform: with shellQuoted: (single quotes, apostrophes escaped) or windowsQuoted: (path refused, nothing opened, when it holds a double quote, a percent or a line break).
+Limits of the native opening: not run in the tests (only the command construction is), non ASCII paths depend on how LibC passes the string to the shell, and an entity with several files opens its current file or else its first file.
 "
 Class {
 	#name : 'MMCCoveragePresenter',
@@ -59,7 +64,8 @@ Class {
 		'nextUncoveredFileButton',
 		'computeAllButton',
 		'filesSummaryPresenter',
-		'isUpdatingFileList'
+		'isUpdatingFileList',
+		'openFileAction'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -580,6 +586,19 @@ MMCCoveragePresenter >> alignTreeWidgetOn: anEntity [
 	table selectedIndex = row ifFalse: [ table selectIndex: row ]
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> anchorFileOf: anEntity [
+	"Answer the canonical file of the file anchor of anEntity (resolved against the rootFolder of the model), nil when it has no file anchor or no file name."
+
+	| anchor |
+	anchor := anEntity sourceAnchor.
+	(anchor notNil and: [ anchor isFileAnchor ]) ifFalse: [ ^ nil ].
+	anchor fileName ifNil: [ ^ nil ].
+	^ [ anchor fileReference canonicalize ]
+		  on: Error
+		  do: [ :e | e return: nil ]
+]
+
 { #category : 'updating' }
 MMCCoveragePresenter >> applyDecorators [
 	"Put the decorators on the text widget. Without a widget nothing is done: they are put when the widget is built (a deferred action would pile up on each refresh)."
@@ -780,19 +799,22 @@ MMCCoveragePresenter >> decorators [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> defaultLayout [
-	"Summary on top; below, three columns separated by two movable dividers (nested paned layouts): the left column (file selector above the tree of the model), the highlighted text, and the uncovered zones above the details. The sliders give about 0.26 / 0.47 / 0.27 of the width (at initialExtent the tree table is about 320 px wide: a label of 39 characters fits)."
+	"Summary on top; below, three columns separated by two movable dividers (nested paned layouts, whose structure is unchanged): the left column (file selector above the tree of the model), the highlighted text, and the uncovered zones above the details. Each panel is wrapped in a discreet titled frame (see panelTitles). The sliders give about 0.27 / 0.47 / 0.26 of the width (at initialExtent the tree table is about 320 px wide: a label of 39 characters fits)."
 
 	^ SpBoxLayout newTopToBottom
-		  add: summaryPresenter expand: false;
+		  add: (self titled: 'Summary' around: summaryPresenter) height: 44;
 		  add: (SpPanedLayout newLeftToRight
-				   positionOfSlider: 0.26;
+				   positionOfSlider: 0.27;
 				   first: self treeColumnLayout;
 				   second: (SpPanedLayout newLeftToRight
 						    positionOfSlider: 0.64;
-						    first: textPresenter;
+						    first: (self titled: 'Source text' around: textPresenter);
 						    second: (SpBoxLayout newTopToBottom
-								     add: uncoveredListPresenter;
-								     add: detailsPresenter;
+								     add:
+									     (self
+										      titled: 'Uncovered zones'
+										      around: uncoveredListPresenter);
+								     add: (self titled: 'Details' around: detailsPresenter);
 								     yourself);
 						    yourself);
 				   yourself);
@@ -925,11 +947,11 @@ MMCCoveragePresenter >> fileListSelectionChangedTo: aFileOrNil [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> fileSelectorLayout [
-	"Filter, file list (fixed height), two compact rows of buttons and the global summary."
+	"Filter, titled file list (fixed height: 150 for the list plus the title strip), two compact rows of buttons and the global summary."
 
 	^ SpBoxLayout newTopToBottom
 		  add: fileFilterPresenter expand: false;
-		  add: fileListPresenter height: 150;
+		  add: (self titled: 'Files' around: fileListPresenter) height: 172;
 		  add: (SpBoxLayout newLeftToRight
 				   add: previousFileButton;
 				   add: nextFileButton;
@@ -1134,6 +1156,31 @@ MMCCoveragePresenter >> nameOfEntity: anEntity [
 	^ name ifEmpty: [ '<unnamed>' ]
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> nativePlatformName [
+	"Answer #macOS, #windows or #other according to OSPlatform current."
+
+	| platform |
+	platform := OSPlatform current.
+	platform isMacOS ifTrue: [ ^ #macOS ].
+	platform isWindows ifTrue: [ ^ #windows ].
+	^ #other
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> nativeRevealCommandFor: aFileReference platform: aPlatformName [
+	"Answer, WITHOUT running it, the shell command that reveals aFileReference in the file manager: macOS open -R <path>, Windows explorer /select,<path>; nil for the other platforms (they use openInOSFileBrowser, no command) and when the path cannot be quoted safely. aPlatformName is #macOS, #windows or #other (see nativePlatformName). The path is always quoted by shellQuoted: or windowsQuoted:, never interpolated as is."
+
+	| path quoted |
+	path := aFileReference fullName.
+	aPlatformName == #macOS ifTrue: [
+		^ 'open -R ' , (self shellQuoted: path) ].
+	aPlatformName == #windows ifTrue: [
+			quoted := self windowsQuoted: path.
+			^ quoted ifNotNil: [ 'explorer /select,' , quoted ] ].
+	^ nil
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> navigator [
 	"Answer the navigator on the model and the coverage (never nil)."
@@ -1190,10 +1237,43 @@ MMCCoveragePresenter >> nextUncoveredFileCandidate [
 	^ nil
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> openFileAction [
+	"Answer the one-argument block evaluated with the FileReference to show in the file manager (Open source file in file manager menu item). Default: the real native opening, revealInFileManager:, which depends on OSPlatform current: macOS runs open -R <path> (the Finder shows the file selected), Windows runs explorer /select,<path> (the file is selected in Explorer), other platforms use openInOSFileBrowser (the parent folder is opened). The path is quoted by nativeRevealCommandFor:platform: (single quotes on macOS, double quotes on Windows; a Windows path with a double quote, a percent or a line break is refused and nothing is opened). The tests inject a recorder with openFileAction: and never run this default."
+
+	^ openFileAction ifNil: [
+		  openFileAction := [ :aFile | self revealInFileManager: aFile ] ]
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> openFileAction: aBlock [
+	"Set the one-argument block evaluated by the Open source file in file manager menu item with the FileReference of the source file."
+
+	openFileAction := aBlock
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> openSourceFileOfTreeEntity [
+	"Show the source file of the entity selected in the tree in the file manager (with openFileAction); do nothing without selection or without file. Selections and synchronization state are untouched."
+
+	| file |
+	file := self sourceFileOf: self selectedEntityInTree.
+	file ifNil: [ ^ self ].
+	self openFileAction value: file
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> palette [
 
 	^ palette
+]
+
+{ #category : 'initialization' }
+MMCCoveragePresenter >> panelTitles [
+	"Answer the visible titles of the panels, in display order: Summary, Files (file selector), Model (tree), Source text, Uncovered zones and Details."
+
+	^ #( 'Summary' 'Files' 'Model' 'Source text' 'Uncovered zones'
+	     'Details' ) collect: [ :each | each copy ]
 ]
 
 { #category : 'files' }
@@ -1362,6 +1442,21 @@ MMCCoveragePresenter >> refreshWindowTitle [
 ]
 
 { #category : 'tree' }
+MMCCoveragePresenter >> revealInFileManager: aFileReference [
+	"Real native opening (never run by the tests): macOS and Windows run nativeRevealCommandFor:platform: with LibC runCommand: (the file is selected in the Finder or Explorer), other platforms open the PARENT folder with openInOSFileBrowser (opening the file itself would start its application). Nothing is done when the command cannot be built safely."
+
+	| platformName command |
+	platformName := self nativePlatformName.
+	platformName == #other ifTrue: [
+		^ aFileReference parent openInOSFileBrowser ].
+	command := self
+		           nativeRevealCommandFor: aFileReference
+		           platform: platformName.
+	command ifNil: [ ^ self ].
+	LibC runCommand: command
+]
+
+{ #category : 'tree' }
 MMCCoveragePresenter >> rootFolderText [
 	"Answer the root folder of the model as a string, whatever its type (FileReference, String or nil)."
 
@@ -1450,6 +1545,19 @@ MMCCoveragePresenter >> setMooseModelBeforeInitialization: aMooseModelOrNil [
 	model := aMooseModelOrNil
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> shellQuoted: aString [
+	"Answer aString as ONE word of a POSIX shell: between single quotes, each single quote written '\''. Nothing inside single quotes is interpreted by the shell (spaces, double quotes, backslash, dollar, back quote, line breaks)."
+
+	^ String streamContents: [ :stream |
+			  stream nextPut: $'.
+			  aString do: [ :each |
+					  each = $'
+						  ifTrue: [ stream nextPutAll: '''\''''' ]
+						  ifFalse: [ stream nextPut: each ] ].
+			  stream nextPut: $' ]
+]
+
 { #category : 'details' }
 MMCCoveragePresenter >> showDetailsAt: aPosition [
 	"Show the details of aPosition in the details widget."
@@ -1471,6 +1579,27 @@ MMCCoveragePresenter >> showFile: aFile [
 	self updateFileCoverage: (modelFiles coverageFor: aFile).
 	self synchronizingDo: [ self selectEntityInTree: selected ].
 	self refreshFileWidgets
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> sourceFileOf: anEntity [
+	"Answer the canonical FileReference of the source file of anEntity, nil when it has none or when the file is missing from the disk (or when anEntity is not an entity). With an inventory: the current file when anEntity has a file anchor there, otherwise the first file of the inventory (modelFiles fileOf:). Without inventory: the file anchor of anEntity resolved against the rootFolder of the model; nil without model."
+
+	| file |
+	(anEntity notNil and: [ anEntity respondsTo: #sourceAnchor ])
+		ifFalse: [ ^ nil ].
+	model ifNil: [ ^ nil ].
+	file := modelFiles
+		        ifNil: [ self anchorFileOf: anEntity ]
+		        ifNotNil: [ :files |
+				        | all |
+				        all := files filesOf: anEntity.
+				        (currentFile notNil and: [ all includes: currentFile ])
+					        ifTrue: [ currentFile ]
+					        ifFalse: [ files fileOf: anEntity ] ].
+	^ (file notNil and: [ file isFile ])
+		  ifTrue: [ file ]
+		  ifFalse: [ nil ]
 ]
 
 { #category : 'cursor' }
@@ -1613,6 +1742,16 @@ MMCCoveragePresenter >> theme [
 	^ theme
 ]
 
+{ #category : 'initialization' }
+MMCCoveragePresenter >> titled: aTitle around: aPresenter [
+	"Answer a frame showing aPresenter under the label aTitle (drawn in a strip above the panel by SpFrameLayout)."
+
+	^ SpFrameLayout new
+		  label: aTitle;
+		  child: aPresenter;
+		  yourself
+]
+
 { #category : 'tree' }
 MMCCoveragePresenter >> toggleChanged: aBoolean [
 	"The user (or a click) changed the check box."
@@ -1634,28 +1773,34 @@ MMCCoveragePresenter >> treeColorFor: anEntity [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> treeColumnLayout [
-	"Left column: the file selector (filter, list, buttons, global summary) above the check box, the status and the tree."
+	"Left column: the file selector (filter, titled list, buttons, global summary) above the check box, the status and the titled tree."
 
 	^ SpBoxLayout newTopToBottom
 		  add: self fileSelectorLayout expand: false;
 		  add: wholeModelTogglePresenter expand: false;
 		  add: treeStatusPresenter expand: false;
-		  add: treePresenter;
+		  add: (self titled: 'Model' around: treePresenter);
 		  yourself
 ]
 
 { #category : 'tree' }
 MMCCoveragePresenter >> treeContextMenu [
-	"Answer a new menu with the only item Inspect, enabled when an entity is selected in the tree (a right click selects the row first)."
+	"Answer a new menu with the items Inspect, enabled when an entity is selected in the tree, and Open source file in file manager (see openFileAction), enabled when the selected entity has an existing source file (a right click selects the row first)."
 
 	| menu |
 	menu := SpMenuPresenter new.
 	menu addGroup: [ :group |
-			group addItem: [ :item |
-					item
-						name: 'Inspect';
-						enabled: self selectedEntityInTree notNil;
-						action: [ self inspectTreeEntity ] ] ].
+			group
+				addItem: [ :item |
+						item
+							name: 'Inspect';
+							enabled: self selectedEntityInTree notNil;
+							action: [ self inspectTreeEntity ] ];
+				addItem: [ :item |
+						item
+							name: 'Open source file in file manager';
+							enabled: (self sourceFileOf: self selectedEntityInTree) notNil;
+							action: [ self openSourceFileOfTreeEntity ] ] ].
 	^ menu
 ]
 
@@ -1875,4 +2020,17 @@ MMCCoveragePresenter >> windowTitleText [
 				  nextPut: $/;
 				  print: modelFiles fileCount;
 				  nextPut: $) ]
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> windowsQuoted: aString [
+	"Answer aString between double quotes for cmd.exe, or nil when it holds a character that cannot be quoted safely there: double quote, percent (variable expansion), line break or NUL."
+
+	(aString anySatisfy: [ :each |
+			 each = $" or: [
+					 each = $% or: [
+							 each = Character cr or: [
+								 each = Character lf or: [ each = Character null ] ] ] ] ])
+		ifTrue: [ ^ nil ].
+	^ '"' , aString , '"'
 ]

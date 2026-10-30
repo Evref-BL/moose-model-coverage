@@ -74,13 +74,13 @@ MMCCoveragePresenterInspectTest >> fixtureAt: aKey [
 
 { #category : 'helpers' }
 MMCCoveragePresenterInspectTest >> inspectItemOf: aMenu [
-	"The only item of the menu (checks there is exactly one, named Inspect)."
+	"The item named Inspect of the menu (checks there is exactly one)."
 
-	| items |
-	items := self menuItemsOf: aMenu.
-	self assert: items size equals: 1.
-	self assert: items first name equals: 'Inspect'.
-	^ items first
+	| inspectItems |
+	inspectItems := (self menuItemsOf: aMenu) select: [ :each |
+		                each name = 'Inspect' ].
+	self assert: inspectItems size equals: 1.
+	^ inspectItems first
 ]
 
 { #category : 'helpers' }
@@ -497,13 +497,21 @@ MMCCoveragePresenterInspectTest >> testTextSelectionChangedToNilLeavesIsSynchron
 ]
 
 { #category : 'tests' }
-MMCCoveragePresenterInspectTest >> testTreeContextMenuHasExactlyOneItemNamedInspect [
-	"One group at least, one item in all: named Inspect (checked by inspectItemOf:)."
+MMCCoveragePresenterInspectTest >> testTreeContextMenuHasOneInspectItemFirst [
+	"Exactly one item named Inspect, and the names of the items are Inspect then Open source file in file manager."
 
 	| menu |
 	menu := self newPresenter treeContextMenu.
-	self assert: (self menuItemsOf: menu) size equals: 1.
-	self assert: (self inspectItemOf: menu) name equals: 'Inspect'
+	self
+		assert:
+			((self menuItemsOf: menu) select: [ :each | each name = 'Inspect' ])
+				size
+		equals: 1.
+	self assert: (self inspectItemOf: menu) name equals: 'Inspect'.
+	self
+		assert:
+		((self menuItemsOf: menu) collect: [ :each | each name ]) asArray
+		equals: #( 'Inspect' 'Open source file in file manager' )
 ]
 
 { #category : 'tests' }
