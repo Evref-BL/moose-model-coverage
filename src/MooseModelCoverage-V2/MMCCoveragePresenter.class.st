@@ -1,10 +1,19 @@
 "
-I show a file with the text covered by the FileAnchors of a Moose model highlighted (one color per entity type and nesting depth, a specific color for the uncovered text). On the right, the list of the uncovered zones (selecting one selects it in the text) and the details of the entities at the cursor position. On top, a summary of the coverage. The model is an MMCFileCoverage. Build me with #on:, #on:theme:, #forModel:file: or #openOn:file:.
+I show a file with the text covered by the FileAnchors of a Moose model highlighted (one color per entity type and nesting depth, a specific color for the uncovered text). The window has three columns. On the left, the tree of the Moose model (a MMCModelNavigator): by default only the entities covered by the file and their ancestors are shown; the ""Whole model"" check box (or #treeFilter: #all) shows the entire model; entities without a region of their own are drawn in grey. In the middle, the highlighted text. On the right, the list of the uncovered zones (selecting one selects it in the text) and the details of the entities at the cursor position. On top, a summary of the coverage. The coverage is an MMCFileCoverage; the Moose model may be nil (empty tree). Build me with #on:, #on:theme:, #on:model:, #on:model:theme:, #forModel:file: or #openOn:file:; #updateFileCoverage: keeps the model and the tree filter, #updateFileCoverage:model: replaces the model too.
+
+Synchronisation tree <-> text: selecting an entity in the tree selects its first region in the text and shows its details; moving the selection or the cursor in the text selects the deepest entity at its start in the tree (unfolding its ancestors), or clears the tree selection when there is none. isSynchronizing prevents loops. Drift trap: selecting an entity in the tree selects its region in the text, and the text announces that selection back; an interval that is exactly a region of the entity selected in the tree is ignored, otherwise Engine (1-50) would be replaced by its attribute starting at the same character.
+
+Layout: nested SpPanedLayouts, two movable dividers (about 0.22 / 0.50 / 0.28 of the width): tree column, text, uncovered zones and details.
+
+Empty states: treeStatusPresenter (between the check box and the tree) shows treeStatusText: no Moose model, or no entity of the model anchored in the file (with the rootFolder). The Whole model check box is disabled without model. A relative path given to #forModel:file: is resolved against the rootFolder of the model.
+
+Example: MMCCoveragePresenter example opens a fictive bank model; newExample answers it not opened.
 
 Known limits
 - Performance in a real window: about 1.4 s to open and 0.3 s to change the file for 60 000 characters / 600 regions; about 4 s and 1.3 s for 200 000 / 2 000; about 11 s and 7 s for 500 000 / 7 000 (removing the Rubric segments with removeAllTextSegmentDecorations is quadratic).
 - The highlight colors are chosen when the window opens, from the background of the text widget. A change of Pharo theme while the window is open is not followed: use applyTheme:.
-- The real mouse click was not automated: the cursor tracking is verified by programmatic selection.
+- A real mouse click was not automated: the cursor tracking and the synchronisation are verified by programmatic Rubric selection.
+- Selecting in the tree an entity without region in this file does not move the text (the details say so).
 "
 Class {
 	#name : 'MMCCoveragePresenter',
@@ -20,7 +29,16 @@ Class {
 		'uncoveredListPresenter',
 		'detailsPresenter',
 		'summaryPresenter',
-		'themeIsForced'
+		'themeIsForced',
+		'model',
+		'navigator',
+		'treePresenter',
+		'wholeModelTogglePresenter',
+		'treeFilter',
+		'isUpdatingToggle',
+		'isSynchronizing',
+		'treeStatusPresenter',
+		'treeStatusText'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -28,79 +46,76 @@ Class {
 
 { #category : 'examples' }
 MMCCoveragePresenter class >> example [
-	"Open the presenter on a standalone fictive coverage (no file, no model): a class, three methods, two attributes, and two uncovered zones (the first and the last lines). Returns the presenter."
+	"Open the fictive example (see #newExample) and answer the presenter."
 
-	| text span entries regions |
-	text := String streamContents: [ :stream |
-			        #( '// Demo file, not covered' 'class Account {'
-			           '  int balance;' '  String owner;' '' '  void deposit(int n) {'
-			           '    balance = balance + n;'
-			           '  }' '' '  void withdraw(int n) {'
-			           '    balance = balance - n;'
-			           '  }' '' '  int getBalance() { return balance; }'
-			           '}' 'run(Account); // not covered' )
-				        do: [ :line | stream nextPutAll: line ]
-				        separatedBy: [ stream nextPut: Character lf ] ].
-	"From the first start token to the end of the first end token found after it."
-	span := [ :startToken :endToken |
-		        | start |
-		        start := text findString: startToken.
-		        start to:
-		        (text findString: endToken startingAt: start)
-		        + endToken size - 1 ].
-	entries := {
-		           ((FamixJavaClass new
-			             name: 'Account';
-			             yourself)
-		            -> (1 + ('// Demo file, not covered' size + 1) to:
-			             (text findString: 'run(Account)') - 2)).
-		           ((FamixJavaAttribute new
-			             name: 'balance';
-			             yourself)
-		            -> (span value: 'int balance;' value: 'balance;')).
-		           ((FamixJavaAttribute new
-			             name: 'owner';
-			             yourself)
-		            -> (span value: 'String owner;' value: 'owner;')).
-		           ((FamixJavaMethod new
-			             name: 'deposit';
-			             yourself) -> (span value: 'void deposit' value: '  }')).
-		           ((FamixJavaMethod new
-			             name: 'withdraw';
-			             yourself)
-		            -> (span value: 'void withdraw' value: '  }')).
-		           ((FamixJavaMethod new
-			             name: 'getBalance';
-			             yourself) -> (span value: 'int getBalance' value: '}')) }.
-	regions := entries collect: [ :association |
-			           MMCEntityRegion
-				           entity: association key
-				           anchor: nil
-				           interval: association value
-				           text:
-				           (text
-					            copyFrom: association value first
-					            to: association value last) ].
-	^ (self on: (MMCFileCoverage fromReadResult: (MMCAnchorReadResult
-						     fileReference: 'Account.java' asFileReference
-						     text: text
-						     regions: regions
-						     ignoredAnchors: #(  )
-						     otherFileAnchorCount: 0)))
+	^ self newExample
 		  open;
 		  yourself
 ]
 
+{ #category : 'examples' }
+MMCCoveragePresenter class >> exampleEntitiesFor: aText [
+	"Answer an association list entity -> interval for the Account example (package bank, class Account, three methods, two attributes); the entities are linked together but not added to a model."
+
+	| package span entity entities |
+	span := [ :startToken :endToken |
+		        | start |
+		        start := aText findString: startToken.
+		        start to:
+		        (aText findString: endToken startingAt: start)
+		        + endToken size - 1 ].
+	package := FamixJavaPackage new
+		           name: 'bank';
+		           yourself.
+	entity := FamixJavaClass new
+		          name: 'Account';
+		          parentPackage: package;
+		          yourself.
+	entities := OrderedCollection new.
+	entities add: entity -> ('// Demo file, not covered' size + 2 to:
+		 (aText findString: 'run(Account)') - 2).
+	#( #( 'balance' 'int balance;' 'balance;' )
+	   #( 'owner' 'String owner;' 'owner;' ) ) do: [ :each |
+			entities add: (FamixJavaAttribute new
+					 name: each first;
+					 parentType: entity;
+					 yourself) -> (span value: (each at: 2) value: (each at: 3)) ].
+	#( #( 'deposit' 'void deposit' '  }' )
+	   #( 'withdraw' 'void withdraw' '  }' )
+	   #( 'getBalance' 'int getBalance' '}' ) ) do: [ :each |
+			entities add: (FamixJavaMethod new
+					 name: each first;
+					 parentType: entity;
+					 yourself) -> (span value: (each at: 2) value: (each at: 3)) ].
+	^ entities
+]
+
+{ #category : 'examples' }
+MMCCoveragePresenter class >> exampleText [
+	"Answer the pseudo-Java text of the example: an uncovered first line, a class Account and an uncovered last line."
+
+	^ String streamContents: [ :stream |
+			  #( '// Demo file, not covered' 'class Account {'
+			     '  int balance;' '  String owner;' '' '  void deposit(int n) {'
+			     '    balance = balance + n;' '  }' '' '  void withdraw(int n) {'
+			     '    balance = balance - n;' '  }' '' '  int getBalance() { return balance; }'
+			     '}' 'run(Account); // not covered' )
+				  do: [ :line | stream nextPutAll: line ]
+				  separatedBy: [ stream nextPut: Character lf ] ]
+]
+
 { #category : 'instance creation' }
 MMCCoveragePresenter class >> forModel: aModel file: aFileReferenceOrString [
-	"Answer a not opened presenter on the coverage of the file aFileReferenceOrString read through the anchors of aModel."
+	"Answer a not opened presenter on the coverage of the file aFileReferenceOrString read through the anchors of aModel. A relative path (String) is first resolved against the rootFolder of aModel. The presenter keeps aModel for the tree."
 
 	| reader |
 	reader := MMCAnchorReader
 		          model: aModel
-		          matcher:
-		          (MMCCanonicalPathMatcher forFile: aFileReferenceOrString).
-	^ self on: (MMCFileCoverage fromReadResult: reader read)
+		          matcher: (MMCCanonicalPathMatcher forFile:
+				           (self resolveFile: aFileReferenceOrString in: aModel)).
+	^ self
+		  on: (MMCFileCoverage fromReadResult: reader read)
+		  model: aModel
 ]
 
 { #category : 'instance creation' }
@@ -122,11 +137,58 @@ MMCCoveragePresenter class >> newApplication: anApplication model: aCoverage the
 		  yourself
 ]
 
+{ #category : 'examples' }
+MMCCoveragePresenter class >> newExample [
+	"Answer a not opened presenter on a fictive Java model (package bank, class Account, three methods, two attributes) and a pseudo-Java text with two uncovered zones. No file is read."
+
+	| text entries aModel regions |
+	text := self exampleText.
+	entries := self exampleEntitiesFor: text.
+	aModel := FamixJavaModel new.
+	aModel add: entries first key parentPackage.
+	entries do: [ :each | aModel add: each key ].
+	regions := entries collect: [ :each |
+			           MMCEntityRegion
+				           entity: each key
+				           anchor: nil
+				           interval: each value
+				           text:
+				           (text copyFrom: each value first to: each value last) ].
+	^ self
+		  on: (MMCFileCoverage fromReadResult: (MMCAnchorReadResult
+					    fileReference: 'Account.java' asFileReference
+					    text: text
+					    regions: regions
+					    ignoredAnchors: #(  )
+					    otherFileAnchorCount: 0))
+		  model: aModel
+]
+
 { #category : 'instance creation' }
 MMCCoveragePresenter class >> on: aCoverage [
 	"Answer a not opened presenter on aCoverage. The theme is #dark until the window is built, then the one of the text background."
 
 	^ self on: aCoverage theme: nil
+]
+
+{ #category : 'instance creation' }
+MMCCoveragePresenter class >> on: aCoverage model: aMooseModelOrNil [
+	"Answer a not opened presenter on aCoverage with the tree of aMooseModelOrNil (nil: empty tree)."
+
+	^ self on: aCoverage model: aMooseModelOrNil theme: nil
+]
+
+{ #category : 'instance creation' }
+MMCCoveragePresenter class >> on: aCoverage model: aMooseModelOrNil theme: aSymbol [
+	"Answer a not opened presenter on aCoverage and aMooseModelOrNil with the forced theme aSymbol (#dark, #light or nil)."
+
+	^ self basicNew
+		  application: self currentApplication;
+		  setMooseModelBeforeInitialization: aMooseModelOrNil;
+		  setModelBeforeInitialization: aCoverage;
+		  setInitialTheme: aSymbol;
+		  initialize;
+		  yourself
 ]
 
 { #category : 'instance creation' }
@@ -146,6 +208,23 @@ MMCCoveragePresenter class >> openOn: aModel file: aFileReferenceOrString [
 	^ (self forModel: aModel file: aFileReferenceOrString)
 		  open;
 		  yourself
+]
+
+{ #category : 'instance creation' }
+MMCCoveragePresenter class >> resolveFile: aFileReferenceOrString in: aModel [
+	"Answer the file under the rootFolder of aModel when aFileReferenceOrString is a relative path of an existing file there, otherwise aFileReferenceOrString unchanged."
+
+	| rootFolder candidate |
+	(aFileReferenceOrString isString and: [
+		 aFileReferenceOrString asFileReference isRelative ]) ifFalse: [
+		^ aFileReferenceOrString ].
+	rootFolder := aModel ifNotNil: [ :each | each rootFolder ].
+	rootFolder ifNil: [ ^ aFileReferenceOrString ].
+	candidate := rootFolder asFileReference resolve:
+		             aFileReferenceOrString.
+	^ candidate isFile
+		  ifTrue: [ candidate ]
+		  ifFalse: [ aFileReferenceOrString ]
 ]
 
 { #category : 'updating' }
@@ -191,12 +270,35 @@ MMCCoveragePresenter >> buildDerivedState [
 	self buildDecorators
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> buildNavigator [
+	"Build the navigator on the current model and coverage, with the current filter."
+
+	navigator := MMCModelNavigator on: model coverage: fileCoverage.
+	navigator filter: treeFilter
+]
+
 { #category : 'updating' }
 MMCCoveragePresenter >> buildPalette [
 
 	palette := MMCColorPalette
 		           forTypeNames: fileCoverage typeNames
 		           theme: theme
+]
+
+{ #category : 'initialization' }
+MMCCoveragePresenter >> buildTreePresenter [
+	"Create the tree of the Moose model (the roots are set by #refreshTree), its check box and its status label."
+
+	treePresenter := self instantiate: SpTreePresenter.
+	treePresenter
+		children: [ :each | navigator childrenOf: each ];
+		display: [ :each | self treeLabelFor: each ];
+		displayColor: [ :each | self treeColorFor: each ].
+	wholeModelTogglePresenter := self newCheckBox.
+	wholeModelTogglePresenter label: 'Whole model'.
+	treeStatusPresenter := self newLabel.
+	treeStatusText := ''
 ]
 
 { #category : 'updating' }
@@ -210,12 +312,16 @@ MMCCoveragePresenter >> clearDecorators [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> connectPresenters [
-	"Wire the events: the decorations when the text widget is built, the cursor when the window is displayed, the table selection."
+	"Wire the events: the decorations when the text widget is built, the cursor when the window is displayed, the tree selection (once), the table selection, the whole model check box."
 
 	textPresenter whenBuiltDo: [ self textWidgetBuilt ].
 	self whenDisplayDo: [ self subscribeToCursor ].
+	treePresenter whenSelectionChangedDo: [ :selection |
+		self treeSelectionChangedTo: selection selectedItem ].
 	uncoveredListPresenter whenSelectionChangedDo: [ :selection |
-		self selectUncoveredRegion: selection selectedItem ]
+		self selectUncoveredRegion: selection selectedItem ].
+	wholeModelTogglePresenter whenChangedDo: [ :state |
+		self toggleChanged: state ]
 ]
 
 { #category : 'actions' }
@@ -235,19 +341,27 @@ MMCCoveragePresenter >> decorators [
 	^ decorators copy
 ]
 
-{ #category : 'initialization' }
+{ #category : 'layout' }
 MMCCoveragePresenter >> defaultLayout [
-	"Summary on top; below, the highlighted text on the left and a column with the uncovered zones above the details on the right."
+	"Summary on top; below, three columns separated by two movable dividers (nested paned layouts): the tree of the model (check box and status above), the highlighted text, and the uncovered zones above the details. The sliders give about 0.22 / 0.50 / 0.28 of the width."
 
 	^ SpBoxLayout newTopToBottom
 		  add: summaryPresenter expand: false;
-		  add: (SpBoxLayout newLeftToRight
-				   add: textPresenter;
-				   add: (SpBoxLayout newTopToBottom
-						    add: uncoveredListPresenter;
-						    add: detailsPresenter;
-						    yourself)
-				   width: 340;
+		  add: (SpPanedLayout newLeftToRight
+				   positionOfSlider: 0.22;
+				   first: (SpBoxLayout newTopToBottom
+						    add: wholeModelTogglePresenter expand: false;
+						    add: treeStatusPresenter expand: false;
+						    add: treePresenter;
+						    yourself);
+				   second: (SpPanedLayout newLeftToRight
+						    positionOfSlider: 0.64;
+						    first: textPresenter;
+						    second: (SpBoxLayout newTopToBottom
+								     add: uncoveredListPresenter;
+								     add: detailsPresenter;
+								     yourself);
+						    yourself);
 				   yourself);
 		  yourself
 ]
@@ -282,6 +396,24 @@ MMCCoveragePresenter >> detailsTextAt: aPosition [
 						  regions do: [ :region |
 								  stream cr.
 								  self putLineOf: region on: stream ] ] ]
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> detailsTextFor: anEntityOrNil [
+	"Answer the label of anEntityOrNil then one line per region in this file, or '' for nil."
+
+	anEntityOrNil ifNil: [ ^ '' ].
+	^ String streamContents: [ :stream |
+			  | regions |
+			  stream nextPutAll: (self treeLabelFor: anEntityOrNil).
+			  regions := navigator regionsOf: anEntityOrNil.
+			  regions ifEmpty: [
+					  stream
+						  cr;
+						  nextPutAll: '  (no region in this file)' ].
+			  regions do: [ :region |
+					  stream cr.
+					  self putRegionLineOf: region on: stream ] ]
 ]
 
 { #category : 'updating' }
@@ -323,10 +455,10 @@ MMCCoveragePresenter >> formatPercentage: aNumber [
 	^ aNumber printShowingDecimalPlaces: 1
 ]
 
-{ #category : 'accessing' }
+{ #category : 'initialization' }
 MMCCoveragePresenter >> initialExtent [
 
-	^ 1000 @ 650
+	^ 1300 @ 700
 ]
 
 { #category : 'initialization' }
@@ -334,6 +466,8 @@ MMCCoveragePresenter >> initializePresenters [
 	"Build the widgets once and fill them with the coverage."
 
 	theme ifNil: [ theme := #dark ].
+	treeFilter := #covered.
+	isUpdatingToggle := false.
 	textPresenter := self newText.
 	textPresenter beNotEditable.
 	uncoveredListPresenter := self instantiate: SpListPresenter.
@@ -343,6 +477,9 @@ MMCCoveragePresenter >> initializePresenters [
 	detailsPresenter beNotEditable.
 	summaryPresenter := self newLabel.
 	decorators := OrderedCollection new.
+	self buildTreePresenter.
+	self buildNavigator.
+	self refreshTree.
 	self buildDerivedState.
 	self fillWidgets
 ]
@@ -352,6 +489,24 @@ MMCCoveragePresenter >> initializeWindow: aWindowPresenter [
 
 	super initializeWindow: aWindowPresenter.
 	aWindowPresenter initialExtent: self initialExtent
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> isEchoOfTreeSelection: anInterval [
+	"Answer true when anInterval is the interval of a region of the entity selected in the tree."
+
+	| selected |
+	selected := self selectedEntityInTree.
+	selected ifNil: [ ^ false ].
+	^ (navigator regionsOf: selected) anySatisfy: [ :region |
+		  region interval = anInterval ]
+]
+
+{ #category : 'accessing' }
+MMCCoveragePresenter >> isSynchronizing [
+	"Answer true while a programmatic synchronisation tree <-> text is running."
+
+	^ isSynchronizing == true
 ]
 
 { #category : 'details' }
@@ -376,6 +531,13 @@ MMCCoveragePresenter >> labelForUncoveredRegion: aRegion [
 	^ lines , ' - ' , aRegion size printString , ' chars - ' , preview
 ]
 
+{ #category : 'accessing' }
+MMCCoveragePresenter >> model [
+	"Answer the Moose model shown in the tree, or nil."
+
+	^ model
+]
+
 { #category : 'details' }
 MMCCoveragePresenter >> nameOfEntity: anEntity [
 	"Answer the mooseName of anEntity as a String, '<unnamed>' when it is empty or when anEntity is not a Moose entity (Object answers a name for any object)."
@@ -384,6 +546,13 @@ MMCCoveragePresenter >> nameOfEntity: anEntity [
 	anEntity isMooseEntity ifFalse: [ ^ '<unnamed>' ].
 	name := anEntity mooseName asString.
 	^ name ifEmpty: [ '<unnamed>' ]
+]
+
+{ #category : 'accessing' }
+MMCCoveragePresenter >> navigator [
+	"Answer the navigator on the model and the coverage (never nil)."
+
+	^ navigator
 ]
 
 { #category : 'accessing' }
@@ -408,6 +577,29 @@ MMCCoveragePresenter >> putLineOf: aRegion on: aStream [
 		nextPutAll: aRegion typeName;
 		nextPut: Character space;
 		nextPutAll: (self nameOfEntity: aRegion entity)
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> putRegionLineOf: aRegion on: aStream [
+	"Write '  Region <a>-<b> (line <l1>-<l2>)' (one line number when the region is on one line)."
+
+	| first last firstLine lastLine |
+	first := aRegion interval first.
+	last := aRegion interval last.
+	firstLine := fileCoverage lineOf: first.
+	lastLine := fileCoverage lineOf: last.
+	aStream
+		nextPutAll: '  Region ';
+		print: first;
+		nextPut: $-;
+		print: last;
+		nextPutAll: ' (line ';
+		print: firstLine.
+	lastLine = firstLine ifFalse: [
+			aStream
+				nextPut: $-;
+				print: lastLine ].
+	aStream nextPut: $)
 ]
 
 { #category : 'details' }
@@ -436,12 +628,63 @@ MMCCoveragePresenter >> refreshHighlights [
 	self applyDecorators
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> refreshTree [
+	"Recompute the roots of the tree from the navigator, clear its selection and update the status message and the check box."
+
+	treePresenter roots: navigator roots asArray.
+	treePresenter unselectAll.
+	self updateTreeStatus
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> rootFolderText [
+	"Answer the root folder of the model as a string, whatever its type (FileReference, String or nil)."
+
+	| rootFolder |
+	rootFolder := model ifNotNil: [ :aModel | aModel rootFolder ].
+	rootFolder ifNil: [ ^ 'not set' ].
+	^ rootFolder isString
+		  ifTrue: [ rootFolder ]
+		  ifFalse: [ rootFolder pathString ]
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> selectEntityInTree: anEntity [
+	"Select anEntity in the tree (and unfold its ancestors when the tree is displayed). Clear the selection when anEntity is nil or not visible with the current filter."
+
+	| path |
+	path := anEntity ifNotNil: [ navigator pathTo: anEntity ].
+	path ifNil: [ ^ treePresenter unselectAll ].
+	treePresenter hasAdapter ifTrue: [
+			1 to: path size - 1 do: [ :each |
+			treePresenter expandPath: (path first: each) ] ].
+	treePresenter selectPath: path
+]
+
 { #category : 'actions' }
 MMCCoveragePresenter >> selectUncoveredRegion: aRegion [
 	"Select the interval of aRegion in the text (the text scrolls to it). Do nothing for nil."
 
 	aRegion ifNil: [ ^ self ].
 	textPresenter selectionInterval: aRegion interval
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> selectedEntityInTree [
+	"Answer the entity selected in the tree, or nil."
+
+	^ treePresenter selection selectedItem
+]
+
+{ #category : 'cursor' }
+MMCCoveragePresenter >> selectionIntervalIn: aTextArea [
+	"Answer the selected interval of the editor: from the first selected index to the last one (an empty interval n to: n - 1 for a caret)."
+
+	| editor |
+	editor := aTextArea editor.
+	^ (editor markIndex min: editor pointIndex) to:
+	  (editor markIndex max: editor pointIndex) - 1
 ]
 
 { #category : 'initialization' }
@@ -459,6 +702,13 @@ MMCCoveragePresenter >> setModelBeforeInitialization: aCoverage [
 	fileCoverage := aCoverage
 ]
 
+{ #category : 'accessing' }
+MMCCoveragePresenter >> setMooseModelBeforeInitialization: aMooseModelOrNil [
+	"Set the Moose model before the widgets are initialized."
+
+	model := aMooseModelOrNil
+]
+
 { #category : 'details' }
 MMCCoveragePresenter >> showDetailsAt: aPosition [
 	"Show the details of aPosition in the details widget."
@@ -466,9 +716,9 @@ MMCCoveragePresenter >> showDetailsAt: aPosition [
 	detailsPresenter text: (self detailsTextAt: aPosition)
 ]
 
-{ #category : 'actions' }
+{ #category : 'cursor' }
 MMCCoveragePresenter >> subscribeToCursor [
-	"Called when the window is displayed: follow the cursor of the text area (Rubric announces RubSelectionChanged; the Spec selection hook does not see a mere cursor move) and show the details of its position."
+	"Called when the window is displayed: follow the selection of the text area (Rubric announces RubSelectionChanged; the Spec selection hook does not see a mere cursor move) and synchronise the tree and the details with it."
 
 	| textArea |
 	textPresenter hasAdapter ifFalse: [ ^ self ].
@@ -476,7 +726,8 @@ MMCCoveragePresenter >> subscribeToCursor [
 	textArea announcer unsubscribe: self.
 	textArea announcer
 		when: RubSelectionChanged
-		do: [ self showDetailsAt: (self cursorPositionIn: textArea) ]
+		do: [
+		self textSelectionChangedTo: (self selectionIntervalIn: textArea) ]
 		for: self
 ]
 
@@ -493,8 +744,7 @@ MMCCoveragePresenter >> summaryText [
 	with percentages on one decimal, and 'n/a' instead of 'Q %' when there is no significant character."
 
 	| significant |
-	fileCoverage isReadable ifFalse: [
-		^ 'Unreadable file: no anchor of the model designates it, or its text is empty' ].
+	fileCoverage isReadable ifFalse: [ ^ self unreadableSummaryText ].
 	significant := fileCoverage significantPercentage
 		               ifNil: [ 'n/a' ]
 		               ifNotNil: [ :percentage |
@@ -523,10 +773,42 @@ MMCCoveragePresenter >> summaryText [
 				  nextPutAll: ' anchor(s) in other files' ]
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> syncToggleWithFilter [
+	"Put the check box in the state of the filter, without reacting to its own event."
+
+	isUpdatingToggle == true ifTrue: [ ^ self ].
+	isUpdatingToggle := true.
+	[ wholeModelTogglePresenter state: treeFilter = #all ] ensure: [
+		isUpdatingToggle := false ]
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> textPresenter [
 
 	^ textPresenter
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> textSelectionChangedTo: anInterval [
+	"The text selection changed: select in the tree the deepest entity at the start of anInterval and show its details; when there is none, clear the tree selection and show the details of the position. An interval that is exactly a region of the selected entity is the echo of the tree selection: ignored (Engine and its attribute share the same first character)."
+
+	| position entity |
+	self isSynchronizing ifTrue: [ ^ self ].
+	fileCoverage isReadable ifFalse: [ ^ self ].
+	(self isEchoOfTreeSelection: anInterval) ifTrue: [ ^ self ].
+	position := (anInterval first max: 1) min: fileCoverage size.
+	isSynchronizing := true.
+	[
+		entity := navigator deepestEntityAt: position.
+		entity
+			ifNil: [
+					treePresenter unselectAll.
+					detailsPresenter text: (self detailsTextAt: position) ]
+			ifNotNil: [
+					self selectEntityInTree: entity.
+					detailsPresenter text: (self detailsTextFor: entity) ] ] ensure: [
+		isSynchronizing := false ]
 ]
 
 { #category : 'updating' }
@@ -550,15 +832,115 @@ MMCCoveragePresenter >> theme [
 	^ theme
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> toggleChanged: aBoolean [
+	"The user (or a click) changed the check box."
+
+	isUpdatingToggle == true ifTrue: [ ^ self ].
+	self treeFilter: (aBoolean
+			 ifTrue: [ #all ]
+			 ifFalse: [ #covered ])
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> treeColorFor: anEntity [
+	"Answer nil (default color) for an entity with a region of its own, a neutral grey otherwise."
+
+	^ (navigator isCovered: anEntity)
+		  ifTrue: [ nil ]
+		  ifFalse: [ self uncoveredTreeColor ]
+]
+
+{ #category : 'accessing' }
+MMCCoveragePresenter >> treeFilter [
+	"Answer #covered (entities of the coverage and their ancestors) or #all (whole model)."
+
+	^ treeFilter
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> treeFilter: aSymbol [
+	"Show only the covered entities (#covered) or the whole model (#all). Updates the navigator, the roots and the check box."
+
+	(#( #covered #all ) includes: aSymbol) ifFalse: [
+			^ self error: 'Invalid tree filter (expected #covered or #all): '
+				  , aSymbol printString ].
+	aSymbol = treeFilter ifTrue: [ ^ self ].
+	treeFilter := aSymbol.
+	navigator filter: aSymbol.
+	self refreshTree.
+	self syncToggleWithFilter
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> treeLabelFor: anEntity [
+	"Answer '<type> <label>' for anEntity."
+
+	^ (navigator typeNameOf: anEntity) , ' '
+	  , (navigator labelOf: anEntity)
+]
+
+{ #category : 'accessing' }
+MMCCoveragePresenter >> treePresenter [
+
+	^ treePresenter
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> treeSelectionChangedTo: anEntityOrNil [
+	"The tree selection changed: select the first region of the entity in the text (unchanged when it has none) and show its details."
+
+	self isSynchronizing ifTrue: [ ^ self ].
+	isSynchronizing := true.
+	[
+		anEntityOrNil ifNotNil: [
+				(navigator firstRegionOf: anEntityOrNil) ifNotNil: [ :region |
+					textPresenter selectionInterval: region interval ] ].
+		detailsPresenter text: (self detailsTextFor: anEntityOrNil) ]
+		ensure: [ isSynchronizing := false ]
+]
+
+{ #category : 'accessing' }
+MMCCoveragePresenter >> treeStatusPresenter [
+	"Answer the label shown between the check box and the tree (empty states)."
+
+	^ treeStatusPresenter
+]
+
+{ #category : 'accessing' }
+MMCCoveragePresenter >> treeStatusText [
+	"Answer the message of the empty states of the tree, or an empty string."
+
+	^ treeStatusText ifNil: [ '' ]
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> uncoveredListPresenter [
 
 	^ uncoveredListPresenter
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> uncoveredTreeColor [
+	"Opaque grey, readable on dark and light backgrounds."
+
+	^ Color gray: 0.55
+]
+
+{ #category : 'summary' }
+MMCCoveragePresenter >> unreadableSummaryText [
+	"Answer the summary of an unreadable file; with a Moose model, remind where the relative anchors are resolved."
+
+	| base |
+	base := 'Unreadable file: no anchor of the model designates it, or its text is empty'.
+	^ model
+		  ifNil: [ base ]
+		  ifNotNil: [ base , ' (rootFolder: ' , self rootFolderText , ')' ]
+]
+
 { #category : 'updating' }
 MMCCoveragePresenter >> updateFileCoverage: aCoverage [
-	"Replace the coverage and everything derived from it (plan, palette, text, uncovered zones, summary, details, decorations). The theme is kept. Order matters: decorations are removed before the text changes, and put back last."
+	"Replace the coverage and everything derived from it (plan, palette, text, uncovered zones, summary, details, decorations, navigator and tree roots). The theme, the Moose model and the tree filter are kept. Order matters: decorations are removed before the text changes, and put back last."
 
 	self clearDecorators.
 	fileCoverage := aCoverage.
@@ -566,8 +948,35 @@ MMCCoveragePresenter >> updateFileCoverage: aCoverage [
 	uncoveredRegions := fileCoverage uncoveredRegions.
 	self buildPalette.
 	self fillWidgets.
+	self buildNavigator.
+	self refreshTree.
 	self buildDecorators.
 	self applyDecorators
+]
+
+{ #category : 'updating' }
+MMCCoveragePresenter >> updateFileCoverage: aCoverage model: aMooseModelOrNil [
+	"Replace the Moose model and the coverage; the theme and the tree filter are kept."
+
+	model := aMooseModelOrNil.
+	self updateFileCoverage: aCoverage
+]
+
+{ #category : 'tree' }
+MMCCoveragePresenter >> updateTreeStatus [
+	"Show the message of the empty states: no Moose model, or no entity of the model anchored in the file."
+
+	treeStatusText := model
+		                  ifNil: [
+		                  'No Moose model: open with MMCCoveragePresenter openOn:file:' ]
+		                  ifNotNil: [
+				                  navigator roots isEmpty
+					                  ifTrue: [
+							                  'No entity of the model is anchored in this file (rootFolder: '
+							                  , self rootFolderText , ')' ]
+					                  ifFalse: [ '' ] ].
+	treeStatusPresenter label: treeStatusText.
+	wholeModelTogglePresenter enabled: model notNil
 ]
 
 { #category : 'initialization' }
@@ -577,6 +986,12 @@ MMCCoveragePresenter >> validateTheme: aSymbol [
 			self error:
 				'Unknown theme ' , aSymbol printString
 				, ' (expected #dark or #light)' ]
+]
+
+{ #category : 'accessing' }
+MMCCoveragePresenter >> wholeModelTogglePresenter [
+
+	^ wholeModelTogglePresenter
 ]
 
 { #category : 'updating' }
