@@ -1,5 +1,5 @@
 "
-I show a file with the text covered by the FileAnchors of a Moose model highlighted (one color per entity type and nesting depth, a specific color for the uncovered text). The window has three columns. On the left, the tree of the Moose model (a MMCModelNavigator): by default only the entities covered by the file and their ancestors are shown; the ""Whole model"" check box (or #treeFilter: #all) shows the entire model; entities without a region of their own are drawn in grey. In the middle, the highlighted text. On the right, the list of the uncovered zones (selecting one selects it in the text) and the details of the entities at the cursor position. On top, a summary of the coverage. The coverage is an MMCFileCoverage; the Moose model may be nil (empty tree). Build me with #on:, #on:theme:, #on:model:, #on:model:theme:, #forModel:file: or #openOn:file:; #updateFileCoverage: keeps the model and the tree filter, #updateFileCoverage:model: replaces the model too.
+I show a file with the text covered by the FileAnchors of a Moose model highlighted (one color per entity type and nesting depth, a specific color for the uncovered text). The window has three columns. On the left, the file selector (with an inventory, see below) above the tree of the Moose model (a MMCModelNavigator): by default only the entities covered by the file and their ancestors are shown; the ""Whole model"" check box (or #treeFilter: #all) shows the entire model; entities without a region of their own are drawn in grey. In the middle, the highlighted text. On the right, the list of the uncovered zones (selecting one selects it in the text) and the details of the entities at the cursor position. On top, a summary of the coverage. The coverage is an MMCFileCoverage; the Moose model may be nil (empty tree). Build me with #on:, #on:theme:, #on:model:, #on:model:theme:, #forModel:file: or #openOn:file:; #updateFileCoverage: keeps the model and the tree filter, #updateFileCoverage:model: replaces the model too.
 
 Synchronisation tree <-> text: selecting an entity in the tree selects its first region in the text and shows its details; moving the selection or the cursor in the text selects the deepest entity at its start in the tree (unfolding its ancestors), or clears the tree selection when there is none. isSynchronizing prevents loops. Drift trap: selecting an entity in the tree selects its region in the text, and the text announces that selection back; an interval that is exactly a region of the entity selected in the tree is ignored, otherwise Engine (1-50) would be replaced by its attribute starting at the same character.
 
@@ -15,6 +15,11 @@ Known limits
 - A real mouse click was not automated: the cursor tracking and the synchronisation are verified by programmatic Rubric selection.
 - Selecting in the tree an entity without region in this file does not move the text (the details say so).
 Tree context menu ""Inspect"" (right click): opens the Pharo inspector on the selected entity (entity inspect); the action is injectable with inspectAction:.
+
+File by file navigation (with inventory): #forModel: and #openOn: (and #openOn:file:, opened on that file, when the inventory holds it) build the presenter on a MMCModelFiles (modelFiles): files sorted by relative path, unreadable ones listed with the label ""<relative>  (warning sign) unreadable"". The coverage is computed on demand: opening computes only the current file (currentFile); the label of the other files is ""<relative>  ?"" until computed, then ""<relative>  P%"". API: showFile:, previousFile, nextFile (complete sorted order, filter ignored), nextUncoveredFile (skips unreadable files, computes on demand, loops, does nothing if the only candidate is the current file), computeAllFiles, visibleFiles (text filter on the relative name, ignoring case), fileLabelFor:, globalSummaryText (Files: N, computed K/N, covered P%), windowTitleText (Coverage - <relative> (i/N)), kept by the open window. Widgets: fileFilterPresenter, fileListPresenter, previousFileButton, nextFileButton, nextUncoveredFileButton, computeAllButton, filesSummaryPresenter.
+Automatic switch: selecting in the tree an entity without region in the current file switches to the first file of filesOf: where it has a region and selects the region (nothing moves when it has no region anywhere). The tree selection is kept after a file change when its entity is still visible.
+#on:, #on:model: and #forModel:file: build a presenter WITHOUT inventory: modelFiles and currentFile are nil, the file widgets are disabled, windowTitleText is Coverage and the file navigation messages do nothing.
+Limits: the file list is rebuilt at each file change (labels are recomputed); an unreadable file counts as computed with 0 character in the global summary; the model is not observed (use modelFiles invalidate and rebuild after changing it).
 "
 Class {
 	#name : 'MMCCoveragePresenter',
@@ -40,11 +45,33 @@ Class {
 		'isSynchronizing',
 		'treeStatusPresenter',
 		'treeStatusText',
-		'inspectAction'
+		'inspectAction',
+		'modelFiles',
+		'currentFile',
+		'fileListPresenter',
+		'fileFilterPresenter',
+		'previousFileButton',
+		'nextFileButton',
+		'nextUncoveredFileButton',
+		'computeAllButton',
+		'filesSummaryPresenter',
+		'isUpdatingFileList'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
 }
+
+{ #category : 'instance creation' }
+MMCCoveragePresenter class >> emptyCoverage [
+	"Answer the coverage shown when there is no file to show (unreadable)."
+
+	^ MMCFileCoverage fromReadResult: (MMCAnchorReadResult
+			   fileReference: nil
+			   text: ''
+			   regions: #(  )
+			   ignoredAnchors: #(  )
+			   otherFileAnchorCount: 0)
+]
 
 { #category : 'examples' }
 MMCCoveragePresenter class >> example [
@@ -104,6 +131,33 @@ MMCCoveragePresenter class >> exampleText [
 			     '}' 'run(Account); // not covered' )
 				  do: [ :line | stream nextPutAll: line ]
 				  separatedBy: [ stream nextPut: Character lf ] ]
+]
+
+{ #category : 'instance creation' }
+MMCCoveragePresenter class >> forInventoryOn: aModel file: aFileReferenceOrString [
+	"Answer a not opened presenter with the file selector of aModel, on aFileReferenceOrString. When aModel is nil or its inventory does not hold the file, answer the single file presenter of forModel:file:."
+
+	| file files |
+	aModel ifNil: [ ^ self forModel: aModel file: aFileReferenceOrString ].
+	files := MMCModelFiles on: aModel.
+	file := [
+		        (self resolveFile: aFileReferenceOrString in: aModel)
+			        asFileReference canonicalize ]
+		        on: Error
+		        do: [ :error | error return: nil ].
+	^ (file notNil and: [ files files includes: file ])
+		  ifTrue: [ self newOnInventory: files of: aModel startingAt: file ]
+		  ifFalse: [ self forModel: aModel file: aFileReferenceOrString ]
+]
+
+{ #category : 'instance creation' }
+MMCCoveragePresenter class >> forModel: aModel [
+	"Answer a not opened presenter with the file selector on the inventory of the source files of aModel (MMCModelFiles). It shows the first file in sorted order; only this file is computed."
+
+	^ self
+		  newOnInventory: (MMCModelFiles on: aModel)
+		  of: aModel
+		  startingAt: nil
 ]
 
 { #category : 'instance creation' }
@@ -167,6 +221,27 @@ MMCCoveragePresenter class >> newExample [
 ]
 
 { #category : 'instance creation' }
+MMCCoveragePresenter class >> newOnInventory: files of: aModel startingAt: aFileOrNil [
+	"Answer a not opened presenter on the inventory files of aModel, showing aFileOrNil (a file of the inventory) or the first sorted file when nil."
+
+	| file |
+	file := aFileOrNil ifNil: [
+		        files files
+			        ifEmpty: [ nil ]
+			        ifNotEmpty: [ :all | all first ] ].
+	^ self basicNew
+		  application: self currentApplication;
+		  setMooseModelBeforeInitialization: aModel;
+		  setFilesBeforeInitialization: files current: file;
+		  setModelBeforeInitialization: (file
+				   ifNil: [ self emptyCoverage ]
+				   ifNotNil: [ files coverageFor: file ]);
+		  setInitialTheme: nil;
+		  initialize;
+		  yourself
+]
+
+{ #category : 'instance creation' }
 MMCCoveragePresenter class >> on: aCoverage [
 	"Answer a not opened presenter on aCoverage. The theme is #dark until the window is built, then the one of the text background."
 
@@ -204,10 +279,19 @@ MMCCoveragePresenter class >> on: aCoverage theme: aSymbol [
 ]
 
 { #category : 'instance creation' }
-MMCCoveragePresenter class >> openOn: aModel file: aFileReferenceOrString [
-	"Open and answer a presenter on the coverage of the file aFileReferenceOrString in aModel."
+MMCCoveragePresenter class >> openOn: aModel [
+	"Open and answer a presenter with the file selector on aModel, on its first file in sorted order."
 
-	^ (self forModel: aModel file: aFileReferenceOrString)
+	^ (self forModel: aModel)
+		  open;
+		  yourself
+]
+
+{ #category : 'instance creation' }
+MMCCoveragePresenter class >> openOn: aModel file: aFileReferenceOrString [
+	"Open and answer a presenter on aFileReferenceOrString in aModel. With a model whose inventory holds the file, the presenter has the file selector and opens on this file; otherwise it is a single file presenter (see forModel:file:)."
+
+	^ (self forInventoryOn: aModel file: aFileReferenceOrString)
 		  open;
 		  yourself
 ]
@@ -272,6 +356,39 @@ MMCCoveragePresenter >> buildDerivedState [
 	self buildDecorators
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> buildFileWidgets [
+	"Create the file selector widgets (filter, list, buttons, global summary). Without inventory they are disabled."
+
+	isUpdatingFileList := false.
+	fileFilterPresenter := self newTextInput.
+	fileFilterPresenter placeholder: 'Filter files'.
+	fileListPresenter := self instantiate: SpListPresenter.
+	fileListPresenter display: [ :file | self fileLabelFor: file ].
+	previousFileButton := self newButton.
+	previousFileButton
+		label: 'Previous';
+		help: 'Previous file';
+		action: [ self previousFile ].
+	nextFileButton := self newButton.
+	nextFileButton
+		label: 'Next';
+		help: 'Next file';
+		action: [ self nextFile ].
+	nextUncoveredFileButton := self newButton.
+	nextUncoveredFileButton
+		label: 'Next uncovered';
+		help: 'Next file with uncovered zones';
+		action: [ self nextUncoveredFile ].
+	computeAllButton := self newButton.
+	computeAllButton
+		label: 'Compute all';
+		help: 'Compute the coverage of every file';
+		action: [ self computeAllFiles ].
+	filesSummaryPresenter := self newLabel.
+	self refreshFileWidgets
+]
+
 { #category : 'tree' }
 MMCCoveragePresenter >> buildNavigator [
 	"Build the navigator on the current model and coverage, with the current filter."
@@ -313,9 +430,24 @@ MMCCoveragePresenter >> clearDecorators [
 	decorators := OrderedCollection new
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> computeAllButton [
+
+	^ computeAllButton
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> computeAllFiles [
+	"Compute the coverage of every file of the inventory (those already computed are kept) and refresh the labels and the global summary. The current file does not change."
+
+	modelFiles ifNil: [ ^ self ].
+	modelFiles computeAll.
+	self refreshFileWidgets
+]
+
 { #category : 'initialization' }
 MMCCoveragePresenter >> connectPresenters [
-	"Wire the events: the decorations when the text widget is built, the cursor when the window is displayed, the tree selection (once), the table selection, the whole model check box."
+	"Wire the events: the decorations when the text widget is built, the cursor when the window is displayed, the tree selection (once), the table selection, the whole model check box, the file list and the file filter."
 
 	textPresenter whenBuiltDo: [ self textWidgetBuilt ].
 	self whenDisplayDo: [ self subscribeToCursor ].
@@ -324,7 +456,33 @@ MMCCoveragePresenter >> connectPresenters [
 	uncoveredListPresenter whenSelectionChangedDo: [ :selection |
 		self selectUncoveredRegion: selection selectedItem ].
 	wholeModelTogglePresenter whenChangedDo: [ :state |
-		self toggleChanged: state ]
+		self toggleChanged: state ].
+	fileListPresenter whenSelectionChangedDo: [ :selection |
+		self fileListSelectionChangedTo: selection selectedItem ].
+	fileFilterPresenter whenTextChangedDo: [ :text |
+		self fileFilterChanged ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> coverage: aCoverage hasRegionOf: anEntity [
+
+	^ aCoverage regions anySatisfy: [ :each | each entity == anEntity ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> currentFile [
+	"Answer the file shown (canonical FileReference of the inventory), nil without inventory."
+
+	^ currentFile
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> currentFileIndex [
+	"Answer the rank of the current file among all the files, 0 without inventory."
+
+	^ modelFiles
+		  ifNil: [ 0 ]
+		  ifNotNil: [ modelFiles files indexOf: currentFile ]
 ]
 
 { #category : 'actions' }
@@ -344,19 +502,15 @@ MMCCoveragePresenter >> decorators [
 	^ decorators copy
 ]
 
-{ #category : 'layout' }
+{ #category : 'initialization' }
 MMCCoveragePresenter >> defaultLayout [
-	"Summary on top; below, three columns separated by two movable dividers (nested paned layouts): the tree of the model (check box and status above), the highlighted text, and the uncovered zones above the details. The sliders give about 0.22 / 0.50 / 0.28 of the width."
+	"Summary on top; below, three columns separated by two movable dividers (nested paned layouts): the left column (file selector above the tree of the model), the highlighted text, and the uncovered zones above the details. The sliders give about 0.22 / 0.50 / 0.28 of the width."
 
 	^ SpBoxLayout newTopToBottom
 		  add: summaryPresenter expand: false;
 		  add: (SpPanedLayout newLeftToRight
 				   positionOfSlider: 0.22;
-				   first: (SpBoxLayout newTopToBottom
-						    add: wholeModelTogglePresenter expand: false;
-						    add: treeStatusPresenter expand: false;
-						    add: treePresenter;
-						    yourself);
+				   first: self treeColumnLayout;
 				   second: (SpPanedLayout newLeftToRight
 						    positionOfSlider: 0.64;
 						    first: textPresenter;
@@ -440,6 +594,90 @@ MMCCoveragePresenter >> fileCoverage [
 	^ fileCoverage
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> fileFilterChanged [
+	"The filter text changed: refresh the list, the current file does not change."
+
+	isUpdatingFileList == true ifTrue: [ ^ self ].
+	self refreshFileList
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileFilterPresenter [
+
+	^ fileFilterPresenter
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileLabelFor: aFile [
+	"Answer the label of aFile in the list: '<relative>  ?' until computed, '<relative>  P%' once computed, '<relative>  (warning sign) unreadable' when it cannot be read."
+
+	| name |
+	name := modelFiles relativeNameOf: aFile.
+	(modelFiles isReadable: aFile) ifFalse: [
+			^ name , '  ' , (String with: (Character value: 16r26A0))
+			  , ' unreadable' ].
+	^ name , '  '
+	  , (self percentageLabelOf: (modelFiles summaryFor: aFile))
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileListPresenter [
+
+	^ fileListPresenter
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileListSelectionChangedTo: aFileOrNil [
+	"The user selected a file in the list: show it. Ignored while the list is refreshed or when nothing is selected."
+
+	(isUpdatingFileList == true or: [ aFileOrNil isNil ]) ifTrue: [
+		^ self ].
+	self showFile: aFileOrNil
+]
+
+{ #category : 'initialization' }
+MMCCoveragePresenter >> fileSelectorLayout [
+	"Filter, file list (fixed height), two compact rows of buttons and the global summary."
+
+	^ SpBoxLayout newTopToBottom
+		  add: fileFilterPresenter expand: false;
+		  add: fileListPresenter height: 150;
+		  add: (SpBoxLayout newLeftToRight
+				   add: previousFileButton;
+				   add: nextFileButton;
+				   yourself)
+		  expand: false;
+		  add: (SpBoxLayout newLeftToRight
+				   add: nextUncoveredFileButton;
+				   add: computeAllButton;
+				   yourself)
+		  expand: false;
+		  add: filesSummaryPresenter expand: false;
+		  yourself
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileToSwitchFor: anEntityOrNil [
+	"Answer the file to switch to when anEntityOrNil is selected in the tree: nil when there is no inventory, no entity, or when the entity has a region in the current file; otherwise the first file of filesOf: (other than the current one) where it has a region, nil if there is none."
+
+	(modelFiles isNil or: [ anEntityOrNil isNil ]) ifTrue: [ ^ nil ].
+	(navigator regionsOf: anEntityOrNil) ifNotEmpty: [ ^ nil ].
+	^ (modelFiles filesOf: anEntityOrNil)
+		  detect: [ :each |
+				  each ~= currentFile and: [
+						  self
+							  coverage: (modelFiles coverageFor: each)
+							  hasRegionOf: anEntityOrNil ] ]
+		  ifNone: [ nil ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> filesSummaryPresenter [
+
+	^ filesSummaryPresenter
+]
+
 { #category : 'updating' }
 MMCCoveragePresenter >> fillWidgets [
 	"Show the current coverage in the widgets (the decorations are not touched)."
@@ -456,6 +694,31 @@ MMCCoveragePresenter >> formatPercentage: aNumber [
 	"Answer aNumber with one decimal, for example '74.3'."
 
 	^ aNumber printShowingDecimalPlaces: 1
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> globalSummaryText [
+	"Answer 'Files: N (middle dot) computed K/N (middle dot) covered P%' (covered ? when no character is measured), empty without inventory. An unreadable file computed counts for K with no character."
+
+	| summary separator |
+	modelFiles ifNil: [ ^ '' ].
+	summary := modelFiles globalSummary.
+	separator := ' ' , (String with: (Character value: 16rB7)) , ' '.
+	^ String streamContents: [ :stream |
+			  stream
+				  nextPutAll: 'Files: ';
+				  print: modelFiles fileCount;
+				  nextPutAll: separator;
+				  nextPutAll: 'computed ';
+				  print: summary fileCount;
+				  nextPut: $/;
+				  print: modelFiles fileCount;
+				  nextPutAll: separator;
+				  nextPutAll: 'covered ';
+				  nextPutAll: (summary coveredPercentage
+						   ifNil: [ '?' ]
+						   ifNotNil: [ :percentage |
+							   (self formatPercentage: percentage) , '%' ]) ]
 ]
 
 { #category : 'initialization' }
@@ -484,7 +747,8 @@ MMCCoveragePresenter >> initializePresenters [
 	self buildNavigator.
 	self refreshTree.
 	self buildDerivedState.
-	self fillWidgets
+	self fillWidgets.
+	self buildFileWidgets
 ]
 
 { #category : 'initialization' }
@@ -566,6 +830,13 @@ MMCCoveragePresenter >> model [
 	^ model
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> modelFiles [
+	"Answer the inventory of the source files of the model (MMCModelFiles), nil for a presenter without file selector."
+
+	^ modelFiles
+]
+
 { #category : 'details' }
 MMCCoveragePresenter >> nameOfEntity: anEntity [
 	"Answer the mooseName of anEntity as a String, '<unnamed>' when it is empty or when anEntity is not a Moose entity (Object answers a name for any object)."
@@ -583,16 +854,92 @@ MMCCoveragePresenter >> navigator [
 	^ navigator
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> nextFile [
+	"Show the next file of the complete sorted list (the filter is ignored, unreadable files included). Do nothing on the last file."
+
+	| index |
+	index := self currentFileIndex.
+	(index > 0 and: [ index < modelFiles fileCount ]) ifTrue: [
+		self showFile: (modelFiles files at: index + 1) ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> nextFileButton [
+
+	^ nextFileButton
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> nextUncoveredFile [
+	"Show the next file, after the current one and looping, that has an uncovered zone. Unreadable files are skipped, the others are computed on demand. Do nothing when there is none other than the current file."
+
+	| file |
+	file := self nextUncoveredFileCandidate.
+	file ifNil: [ ^ self refreshFileWidgets ].
+	self showFile: file
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> nextUncoveredFileButton [
+
+	^ nextUncoveredFileButton
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> nextUncoveredFileCandidate [
+	"Answer the first file other than the current one, in loop order after it, that is readable and has an uncovered zone; nil if none. Stops at the first candidate."
+
+	| index count |
+	index := self currentFileIndex.
+	index = 0 ifTrue: [ ^ nil ].
+	count := modelFiles fileCount.
+	1 to: count - 1 do: [ :offset |
+			| file |
+			file := modelFiles files at: index + offset - 1 \\ count + 1.
+			((modelFiles isReadable: file) and: [
+				 (modelFiles coverageFor: file) uncoveredRegions isNotEmpty ])
+				ifTrue: [ ^ file ] ].
+	^ nil
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> palette [
 
 	^ palette
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> percentageLabelOf: aCoverageOrNil [
+	"Answer '?' for a coverage not computed (nil) or without character, else the percentage with one decimal and %."
+
+	| percentage |
+	percentage := aCoverageOrNil ifNotNil: [ :each |
+		              each coveredPercentage ].
+	^ percentage
+		  ifNil: [ '?' ]
+		  ifNotNil: [ (self formatPercentage: percentage) , '%' ]
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> plan [
 
 	^ plan
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> previousFile [
+	"Show the previous file of the complete sorted list (the filter is ignored, unreadable files included). Do nothing on the first file."
+
+	| index |
+	index := self currentFileIndex.
+	index > 1 ifTrue: [ self showFile: (modelFiles files at: index - 1) ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> previousFileButton [
+
+	^ previousFileButton
 ]
 
 { #category : 'details' }
@@ -647,6 +994,52 @@ MMCCoveragePresenter >> putUncoveredDetailsAt: aPosition on: aStream [
 					print: zone interval last ]
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> refreshFileButtons [
+	"Enable the file widgets when there is an inventory, the navigation buttons according to the rank of the current file."
+
+	| index hasFiles |
+	hasFiles := modelFiles notNil.
+	index := self currentFileIndex.
+	fileFilterPresenter enabled: hasFiles.
+	fileListPresenter enabled: hasFiles.
+	nextUncoveredFileButton enabled: hasFiles.
+	computeAllButton enabled: hasFiles.
+	previousFileButton enabled: index > 1.
+	nextFileButton enabled:
+		(hasFiles and: [ index < modelFiles fileCount ])
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> refreshFileList [
+	"Show the visible files with their labels and select the current file when it is visible, without reacting to the selection."
+
+	| shown |
+	shown := self visibleFiles.
+	isUpdatingFileList := true.
+	[
+		fileListPresenter items: shown.
+		(modelFiles notNil and: [ shown includes: currentFile ]) ifTrue: [
+			fileListPresenter selectItem: currentFile ] ] ensure: [
+		isUpdatingFileList := false ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> refreshFileWidgets [
+	"Bring the file selector (list, summary, buttons) and the window title up to date."
+
+	self refreshFileList.
+	self refreshFilesSummary.
+	self refreshFileButtons.
+	self refreshWindowTitle
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> refreshFilesSummary [
+
+	filesSummaryPresenter label: self globalSummaryText
+]
+
 { #category : 'updating' }
 MMCCoveragePresenter >> refreshHighlights [
 	"Rebuild the decorators from the plan and the palette and put them on the text. Idempotent."
@@ -665,6 +1058,13 @@ MMCCoveragePresenter >> refreshTree [
 	self updateTreeStatus
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> refreshWindowTitle [
+	"Make the open window follow the title of the current file."
+
+	self window ifNotNil: [ :aWindow | aWindow title: self windowTitle ]
+]
+
 { #category : 'tree' }
 MMCCoveragePresenter >> rootFolderText [
 	"Answer the root folder of the model as a string, whatever its type (FileReference, String or nil)."
@@ -677,9 +1077,18 @@ MMCCoveragePresenter >> rootFolderText [
 		  ifFalse: [ rootFolder pathString ]
 ]
 
-{ #category : 'tree' }
+{ #category : 'synchronisation' }
 MMCCoveragePresenter >> selectEntityInTree: anEntity [
-	"Select anEntity in the tree (and unfold its ancestors when the tree is displayed). Clear the selection when anEntity is nil or not visible with the current filter."
+	"Select anEntity in the tree (and unfold its ancestors when the tree is displayed). Clear the selection when anEntity is nil or not visible with the current filter. When the selection triggered a file switch, the tree was rebuilt and the path used is stale: the selection is done again with the new path."
+
+	self selectPathOf: anEntity.
+	(anEntity notNil and: [ self selectedEntityInTree ~~ anEntity ])
+		ifTrue: [ self selectPathOf: anEntity ]
+]
+
+{ #category : 'synchronisation' }
+MMCCoveragePresenter >> selectPathOf: anEntity [
+	"Select the path of anEntity in the current tree, clear the selection when it is nil or not visible."
 
 	| path |
 	path := anEntity ifNotNil: [ navigator pathTo: anEntity ].
@@ -715,6 +1124,14 @@ MMCCoveragePresenter >> selectionIntervalIn: aTextArea [
 	  (editor markIndex max: editor pointIndex) - 1
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> setFilesBeforeInitialization: aModelFiles current: aFile [
+	"Set the inventory and the current file before the widgets are initialized."
+
+	modelFiles := aModelFiles.
+	currentFile := aFile
+]
+
 { #category : 'initialization' }
 MMCCoveragePresenter >> setInitialTheme: aSymbol [
 	"Force the theme (nil keeps the default one, detected when the window is built). Raise an Error on an unknown theme."
@@ -742,6 +1159,22 @@ MMCCoveragePresenter >> showDetailsAt: aPosition [
 	"Show the details of aPosition in the details widget."
 
 	detailsPresenter text: (self detailsTextAt: aPosition)
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> showFile: aFile [
+	"Show the coverage of aFile, a file of the inventory (computed on demand, cached). Do nothing without inventory, for an unknown file or for the current file. The tree selection is kept when its entity is still visible."
+
+	| selected |
+	modelFiles ifNil: [ ^ self ].
+	(aFile notNil and: [ modelFiles files includes: aFile ]) ifFalse: [
+		^ self ].
+	aFile = currentFile ifTrue: [ ^ self ].
+	selected := self selectedEntityInTree.
+	currentFile := aFile.
+	self updateFileCoverage: (modelFiles coverageFor: aFile).
+	self synchronizingDo: [ self selectEntityInTree: selected ].
+	self refreshFileWidgets
 ]
 
 { #category : 'cursor' }
@@ -801,6 +1234,18 @@ MMCCoveragePresenter >> summaryText [
 				  nextPutAll: ' anchor(s) in other files' ]
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> switchToFile: aFile selecting: anEntity [
+	"Show aFile, then select the first region of anEntity in the text and the entity in the tree, without echo."
+
+	self synchronizingDo: [
+			self showFile: aFile.
+			self selectEntityInTree: anEntity.
+			(navigator firstRegionOf: anEntity) ifNotNil: [ :region |
+				textPresenter selectionInterval: region interval ].
+			detailsPresenter text: (self detailsTextFor: anEntity) ]
+]
+
 { #category : 'tree' }
 MMCCoveragePresenter >> syncToggleWithFilter [
 	"Put the check box in the state of the filter, without reacting to its own event."
@@ -809,6 +1254,16 @@ MMCCoveragePresenter >> syncToggleWithFilter [
 	isUpdatingToggle := true.
 	[ wholeModelTogglePresenter state: treeFilter = #all ] ensure: [
 		isUpdatingToggle := false ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> synchronizingDo: aBlock [
+	"Evaluate aBlock with isSynchronizing true (no echo of the tree or text events), restoring the previous state."
+
+	| previous |
+	previous := self isSynchronizing.
+	isSynchronizing := true.
+	aBlock ensure: [ isSynchronizing := previous ]
 ]
 
 { #category : 'accessing' }
@@ -880,6 +1335,18 @@ MMCCoveragePresenter >> treeColorFor: anEntity [
 		  ifFalse: [ self uncoveredTreeColor ]
 ]
 
+{ #category : 'initialization' }
+MMCCoveragePresenter >> treeColumnLayout [
+	"Left column: the file selector (filter, list, buttons, global summary) above the check box, the status and the tree."
+
+	^ SpBoxLayout newTopToBottom
+		  add: self fileSelectorLayout expand: false;
+		  add: wholeModelTogglePresenter expand: false;
+		  add: treeStatusPresenter expand: false;
+		  add: treePresenter;
+		  yourself
+]
+
 { #category : 'tree' }
 MMCCoveragePresenter >> treeContextMenu [
 	"Answer a new menu with the only item Inspect, enabled when an entity is selected in the tree (a right click selects the row first)."
@@ -932,16 +1399,17 @@ MMCCoveragePresenter >> treePresenter [
 
 { #category : 'synchronisation' }
 MMCCoveragePresenter >> treeSelectionChangedTo: anEntityOrNil [
-	"The tree selection changed: select the first region of the entity in the text (unchanged when it has none) and show its details."
+	"The tree selection changed. When the entity has no region in the current file but has some in another file, switch to the first such file and select its first region (see switchToFile:selecting:). Otherwise select the first region of the entity in the text (unchanged when it has none) and show its details."
 
+	| file |
 	self isSynchronizing ifTrue: [ ^ self ].
-	isSynchronizing := true.
-	[
-		anEntityOrNil ifNotNil: [
-				(navigator firstRegionOf: anEntityOrNil) ifNotNil: [ :region |
-					textPresenter selectionInterval: region interval ] ].
-		detailsPresenter text: (self detailsTextFor: anEntityOrNil) ]
-		ensure: [ isSynchronizing := false ]
+	file := self fileToSwitchFor: anEntityOrNil.
+	file ifNotNil: [ ^ self switchToFile: file selecting: anEntityOrNil ].
+	self synchronizingDo: [
+			anEntityOrNil ifNotNil: [
+					(navigator firstRegionOf: anEntityOrNil) ifNotNil: [ :region |
+						textPresenter selectionInterval: region interval ] ].
+			detailsPresenter text: (self detailsTextFor: anEntityOrNil) ]
 ]
 
 { #category : 'accessing' }
@@ -1032,6 +1500,19 @@ MMCCoveragePresenter >> validateTheme: aSymbol [
 				, ' (expected #dark or #light)' ]
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> visibleFiles [
+	"Answer the files whose relative name contains the filter text (ignoring case); all the files when the filter is empty, none without inventory. The absolute path is not looked at."
+
+	| pattern |
+	modelFiles ifNil: [ ^ #(  ) ].
+	pattern := fileFilterPresenter text asString asLowercase.
+	pattern ifEmpty: [ ^ modelFiles files asArray ].
+	^ modelFiles files select: [ :each |
+			  (modelFiles relativeNameOf: each) asLowercase includesSubstring:
+				  pattern ]
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> wholeModelTogglePresenter [
 
@@ -1047,11 +1528,28 @@ MMCCoveragePresenter >> widgetBackgroundColor [
 		  do: [ nil ]
 ]
 
-{ #category : 'accessing' }
+{ #category : 'initialization' }
 MMCCoveragePresenter >> windowTitle [
-	"Answer 'Coverage - <file name>', or 'Coverage - unreadable file' when there is no file."
+	"Answer windowTitleText with an inventory; otherwise 'Coverage - <file name>', or 'Coverage - unreadable file' when there is no file."
 
+	modelFiles ifNotNil: [ ^ self windowTitleText ].
 	^ 'Coverage - ' , (fileCoverage fileReference
 		   ifNil: [ 'unreadable file' ]
 		   ifNotNil: [ :file | file basename ])
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> windowTitleText [
+	"Answer 'Coverage - <relative name> (i/N)' (i: rank of the current file among all the files, N: number of files whatever the filter), or 'Coverage' without inventory."
+
+	(modelFiles isNil or: [ currentFile isNil ]) ifTrue: [ ^ 'Coverage' ].
+	^ String streamContents: [ :stream |
+			  stream
+				  nextPutAll: 'Coverage - ';
+				  nextPutAll: (modelFiles relativeNameOf: currentFile);
+				  nextPutAll: ' (';
+				  print: (modelFiles files indexOf: currentFile);
+				  nextPut: $/;
+				  print: modelFiles fileCount;
+				  nextPut: $) ]
 ]
