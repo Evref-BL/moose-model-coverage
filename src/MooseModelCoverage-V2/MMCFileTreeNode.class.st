@@ -16,6 +16,15 @@ Class {
 }
 
 { #category : 'instance creation' }
+MMCFileTreeNode class >> compactedRoots: aCollectionOfRoots [
+	"Answer the roots of aCollectionOfRoots (see #rootsOf:naming:) with their chains of single folders merged (see #compact), sorted on the merged names. The nodes are modified."
+
+	aCollectionOfRoots do: [ :each |
+		each isFolder ifTrue: [ each compact ] ].
+	^ aCollectionOfRoots asArray sort: [ :a :b | a precedes: b ]
+]
+
+{ #category : 'instance creation' }
 MMCFileTreeNode class >> rootsOf: aFileCollection naming: aBlock [
 	"Answer the top level nodes of the tree of aFileCollection. aBlock gives the relative name of a file, with / separators; its empty segments are ignored."
 
@@ -52,6 +61,22 @@ MMCFileTreeNode >> addFile: aFile segments: aCollection [
 MMCFileTreeNode >> children [
 
 	^ children ifNil: [ children := OrderedCollection new ]
+]
+
+{ #category : 'compacting' }
+MMCFileTreeNode >> compact [
+	"Merge, in the whole subtree, every folder whose only child is a folder with that child (names joined by /, like the compact folders of VSCode), then sort the children on the merged names. Answer the receiver."
+
+	| only |
+	children ifNil: [ ^ self ].
+	children do: [ :each | each isFolder ifTrue: [ each compact ] ].
+	(children size = 1 and: [
+		 self isFolder and: [ children first isFolder ] ]) ifTrue: [
+			only := children first.
+			name := name , '/' , only name.
+			children := only children.
+			children do: [ :each | each parent: self ] ].
+	children sort: [ :a :b | a precedes: b ]
 ]
 
 { #category : 'accessing' }

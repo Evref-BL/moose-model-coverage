@@ -9,6 +9,13 @@ Class {
 }
 
 { #category : 'helpers' }
+MMCFileTreeNodeTest >> compactedRootsOf: aCollection [
+	"Compacted roots of the tree of aCollection of names (each name being its own file)."
+
+	^ MMCFileTreeNode compactedRoots: (self rootsOf: aCollection)
+]
+
+{ #category : 'helpers' }
 MMCFileTreeNodeTest >> namesOf: aCollectionOfNodes [
 
 	^ (aCollectionOfNodes collect: [ :each | each name ]) asArray
@@ -24,6 +31,23 @@ MMCFileTreeNodeTest >> nodeAt: aPath in: roots [
 			node := nodes detect: [ :n | n name = each ].
 			nodes := node children ].
 	^ node
+]
+
+{ #category : 'helpers' }
+MMCFileTreeNodeTest >> outlineOf: aCollectionOfNodes [
+	"Names of the nodes, depth first, indented by two spaces per level."
+
+	| lines walk |
+	lines := OrderedCollection new.
+	walk := nil.
+	walk := [ :nodes :depth |
+		        nodes do: [ :each |
+				        lines add:
+					        (String new: depth * 2 withAll: Character space)
+					        , each name.
+				        walk value: each children value: depth + 1 ] ].
+	walk value: aCollectionOfNodes value: 0.
+	^ lines asArray
 ]
 
 { #category : 'helpers' }
@@ -64,6 +88,173 @@ MMCFileTreeNodeTest >> testChildrenKnowTheirParent [
 	roots := self rootsOf: #( 'a/x' 'a/y' ).
 	roots first children do: [ :each |
 		self assert: each parent == roots first ]
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactAnswersTheReceiverAndLeavesALeafAlone [
+
+	| roots leaf |
+	roots := self rootsOf: #( 'a/b/F.java' ).
+	self assert: roots first compact == roots first.
+	self assert: roots first name equals: 'a/b'.
+	leaf := roots first children first.
+	self assert: leaf isFile.
+	self assert: leaf compact == leaf.
+	self assert: leaf name equals: 'F.java'.
+	self assert: leaf children isEmpty
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactIsIdempotent [
+
+	| roots once twice |
+	roots := self compactedRootsOf:
+		         #( 'src/m/n/F.java' 'src/p/q/r/G.java' 'x/y/H.java'
+		            'a.txt' ).
+	once := self outlineOf: roots.
+	twice := self outlineOf: (MMCFileTreeNode compactedRoots: roots).
+	self assert: twice equals: once.
+	roots do: [ :each | each compact ].
+	self assert: (self outlineOf: roots) equals: once
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactKeepsAFolderHoldingAFileAndAFolder [
+	"src holds a file and a folder: the folder is not merged into src."
+
+	| roots |
+	roots := self compactedRootsOf: #( 'src/sub/B.java' 'src/A.java' ).
+	self
+		assert: (self outlineOf: roots)
+		equals: #( 'src' '  sub' '    B.java' '  A.java' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactKeepsAFolderWithASingleFile [
+	"A folder whose only child is a file keeps its name."
+
+	| roots |
+	roots := self compactedRootsOf: #( 'a/F.java' ).
+	self assert: (self outlineOf: roots) equals: #( 'a' '  F.java' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactKeepsAFolderWithTwoChildren [
+	"src has two folder children: it is not merged with them; each of them holds a file and keeps its name."
+
+	| roots |
+	roots := self compactedRootsOf: #( 'src/a/x.txt' 'src/b/y.txt' ).
+	self
+		assert: (self outlineOf: roots)
+		equals: #( 'src' '  a' '    x.txt' '  b' '    y.txt' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactKeepsTheFilesOfTheLeaves [
+
+	| roots |
+	roots := self compactedRootsOf: #( 'a/b/F.java' 'a/b/G.java' ).
+	self
+		assert:
+		(roots first children collect: [ :each | each file ]) asArray
+		equals: #( 'a/b/F.java' 'a/b/G.java' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactMergesAChainOfSingleFolders [
+	"a/b/c/F.java: the folders a, b, c form one folder named a/b/c holding the leaf."
+
+	| roots |
+	roots := self compactedRootsOf: #( 'a/b/c/F.java' ).
+	self assert: (self outlineOf: roots) equals: #( 'a/b/c' '  F.java' ).
+	self assert: roots first isFolder.
+	self assert: roots first children first isFile
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactSortsTheChildrenOfAFolderOnTheDisplayedName [
+
+	| roots |
+	roots := self compactedRootsOf:
+		         #( 'src/m/z/F.java' 'src/m-/G.java' 'src/H.java' ).
+	self
+		assert: (self namesOf: roots first children)
+		equals: #( 'm-' 'm/z' 'H.java' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactSortsTheChildrenOnTheDisplayedName [
+	"Before the merge m is before m-; after it m/z (/ is after -) is behind m-, a folder named m-."
+
+	| roots |
+	roots := self rootsOf: #( 'm/z/F.java' 'm-/G.java' ).
+	self assert: (self namesOf: roots) equals: #( 'm' 'm-' ).
+	roots := MMCFileTreeNode compactedRoots: roots.
+	self assert: (self namesOf: roots) equals: #( 'm-' 'm/z' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactWorksDeepInTheTree [
+	"src has two children so it stays; m/n and p/q/r are merged below it."
+
+	| roots |
+	roots := self compactedRootsOf:
+		         #( 'src/m/n/F.java' 'src/p/q/r/G.java' ).
+	self
+		assert: (self outlineOf: roots)
+		equals: #( 'src' '  m/n' '    F.java' '  p/q/r' '    G.java' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactedFolderWithTwoFilesKeepsTheMergedName [
+	"The chain a/b ends on a folder with two files: a/b holds both."
+
+	| roots |
+	roots := self compactedRootsOf: #( 'a/b/F.java' 'a/b/G.java' ).
+	self
+		assert: (self outlineOf: roots)
+		equals: #( 'a/b' '  F.java' '  G.java' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactedRootsAreSortedFoldersFirst [
+	"Folders before files, then by displayed name."
+
+	| roots |
+	roots := self compactedRootsOf:
+		         #( 'z.txt' 'b/c/F.java' 'a.txt' 'a/F.java' 'a-/G.java' ).
+	self
+		assert: (self namesOf: roots)
+		equals: #( 'a' 'a-' 'b/c' 'a.txt' 'z.txt' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactedRootsOfAFileAtTheTopLevelIsTheLeaf [
+
+	| roots |
+	roots := self compactedRootsOf: #( 'only.txt' ).
+	self assert: roots size equals: 1.
+	self assert: roots first isFile.
+	self assert: roots first name equals: 'only.txt'
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactedRootsReparentsTheMergedChildren [
+	"After the merge the leaf points to the merged folder, which is a top level node without parent."
+
+	| roots leaf |
+	roots := self compactedRootsOf: #( 'a/b/c/F.java' 'a/b/c/G.java' ).
+	self assert: roots first parent isNil.
+	roots first children do: [ :each |
+		self assert: each parent == roots first ].
+	leaf := roots first children first.
+	self assert: leaf name equals: 'F.java'
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testCompactedRootsWithoutFilesIsEmpty [
+
+	self assert: (self compactedRootsOf: #(  )) isEmpty
 ]
 
 { #category : 'tests' }
@@ -221,6 +412,32 @@ MMCFileTreeNodeTest >> testPathFromRootOfALeaf [
 	self assert: leaf pathFromRoot last == leaf
 ]
 
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testPathFromRootOfALeafOfACompactedFolder [
+
+	| roots leaf |
+	roots := self compactedRootsOf: #( 'src/m/z/F.java' 'src/n/G.java' ).
+	leaf := roots first children first children first.
+	self assert: leaf name equals: 'F.java'.
+	self
+		assert: (self namesOf: leaf pathFromRoot)
+		equals: #( 'src' 'm/z' 'F.java' ).
+	self assert: leaf pathFromRoot first == roots first.
+	self assert: leaf pathFromRoot last == leaf
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testPathFromRootOfALeafUnderACompactedRoot [
+
+	| roots leaf |
+	roots := self compactedRootsOf: #( 'a/b/c/F.java' ).
+	leaf := roots first children first.
+	self
+		assert: (self namesOf: leaf pathFromRoot)
+		equals: #( 'a/b/c' 'F.java' ).
+	self assert: leaf pathFromRoot first == roots first
+]
+
 { #category : 'tests' }
 MMCFileTreeNodeTest >> testPathFromRootOfARootIsItself [
 
@@ -270,6 +487,15 @@ MMCFileTreeNodeTest >> testRootsOfBuildsFoldersAndLeaves [
 	self
 		assert: (self namesOf: a children)
 		equals: #( 'Alpha.java' 'Beta.java' )
+]
+
+{ #category : 'tests - compact' }
+MMCFileTreeNodeTest >> testRootsOfNamingDoesNotCompact [
+	"The tree built by rootsOf:naming: keeps one folder per segment."
+
+	self
+		assert: (self outlineOf: (self rootsOf: #( 'a/b/c/F.java' )))
+		equals: #( 'a' '  b' '    c' '      F.java' )
 ]
 
 { #category : 'tests' }

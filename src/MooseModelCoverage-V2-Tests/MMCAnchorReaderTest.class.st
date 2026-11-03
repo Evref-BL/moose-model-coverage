@@ -379,10 +379,15 @@ MMCAnchorReaderTest >> testMissingFileIsUnreadable [
 
 { #category : 'tests' }
 MMCAnchorReaderTest >> testMultiByteUtf8PositionBeyondCharacterCountButWithinByteCountIsIgnored [
-	"The file has 5 characters but 11 bytes: end 8 is out of bounds when counting characters."
+	"The file has 5 characters, 6 UTF-16 units but 11 bytes: end 8 is out of bounds when counting UTF-16 units (not bytes)."
+
 	| result |
 	self writeText: self unicodeText to: 'u.txt'.
-	self classNamed: 'C' on: 'u.txt' from: 4 to: 8.
+	self
+		classNamed: 'C'
+		on: 'u.txt'
+		from: 4
+		to: 8.
 	result := self readFile: 'u.txt'.
 	self assert: result regions isEmpty.
 	self assert: result ignoredAnchors size equals: 1.
@@ -390,17 +395,24 @@ MMCAnchorReaderTest >> testMultiByteUtf8PositionBeyondCharacterCountButWithinByt
 ]
 
 { #category : 'tests' }
-MMCAnchorReaderTest >> testMultiByteUtf8PositionsCountCharactersNotBytes [
-	"Text a, e acute, euro, grinning face, z: positions 4-5 (characters) are the last two characters."
+MMCAnchorReaderTest >> testMultiByteUtf8PositionsAreUtf16UnitsNotBytes [
+	"Text a, e acute, euro, grinning face, z: 5 characters, 6 UTF-16 units (the emoji outside the BMP counts 2, like VerveineJ), 11 UTF-8 bytes. Units 4-6 are the emoji and z."
+
 	| result region anchor entity |
 	self writeText: self unicodeText to: 'u.txt'.
-	entity := self classNamed: 'C' on: 'u.txt' from: 4 to: 5.
+	entity := self
+		          classNamed: 'C'
+		          on: 'u.txt'
+		          from: 4
+		          to: 6.
 	anchor := entity sourceAnchor.
 	result := self readFile: 'u.txt'.
 	self assert: result text size equals: 5.
 	self assert: result regions size equals: 1.
 	region := result regions first.
-	self assert: region text equals: (String withAll: { Character value: 16r1F600. $z }).
+	self assert: region text equals: (String withAll: {
+				 (Character value: 16r1F600).
+				 $z }).
 	self assert: region size equals: 2.
 	"anchor sourceText works on bytes and is wrong with multi-byte characters: V2 must not use it."
 	self deny: region text = anchor sourceText
@@ -408,9 +420,15 @@ MMCAnchorReaderTest >> testMultiByteUtf8PositionsCountCharactersNotBytes [
 
 { #category : 'tests' }
 MMCAnchorReaderTest >> testMultiByteUtf8WholeTextRegion [
+	"The text 'a e-acute euro grinning-face z' has 5 characters but 6 UTF-16 units (the emoji counts 2): the anchor 1-6 covers it."
+
 	| result |
 	self writeText: self unicodeText to: 'u.txt'.
-	self classNamed: 'C' on: 'u.txt' from: 1 to: 5.
+	self
+		classNamed: 'C'
+		on: 'u.txt'
+		from: 1
+		to: 6.
 	result := self readFile: 'u.txt'.
 	self assert: result ignoredAnchors isEmpty.
 	self assert: result regions first text equals: self unicodeText

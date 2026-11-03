@@ -181,6 +181,7 @@ MMCCoveragePresenterFileTreeTest >> testComputeAllKeepsTheCurrentFileSelectedAnd
 
 { #category : 'tests - navigation' }
 MMCCoveragePresenterFileTreeTest >> testComputeAllKeepsTheFilterOfTheTree [
+	"The filter keeps the ancestors; src has then a single folder child and is compacted with it."
 
 	| presenter |
 	presenter := self builtPresenter.
@@ -188,7 +189,7 @@ MMCCoveragePresenterFileTreeTest >> testComputeAllKeepsTheFilterOfTheTree [
 	presenter computeAllFiles.
 	self
 		assert: (self outlineOf: presenter)
-		equals: #( 'src' '  b' '    Delta.java' '    Gamma.java' )
+		equals: #( 'src/b' '  Delta.java' '  Gamma.java' )
 ]
 
 { #category : 'tests - navigation' }
@@ -378,7 +379,7 @@ MMCCoveragePresenterFileTreeTest >> testFilterHidingTheCurrentFileThenNavigating
 
 { #category : 'tests - filter' }
 MMCCoveragePresenterFileTreeTest >> testFilterHidingTheCurrentFileThenNextUsesTheCompleteList [
-	"CURRENT BEHAVIOUR: Next ignores the filter (documented by nextFile): it shows Beta, which the filter also hides, so the tree still has no selection."
+	"CURRENT BEHAVIOUR: Next ignores the filter (documented by nextFile): it shows Beta, which the filter also hides, so the tree still has no selection. The folders src and b are compacted."
 
 	| presenter |
 	presenter := self builtPresenter.
@@ -388,7 +389,7 @@ MMCCoveragePresenterFileTreeTest >> testFilterHidingTheCurrentFileThenNextUsesTh
 	self assert: (self selectedNodeOf: presenter) isNil.
 	self
 		assert: (self outlineOf: presenter)
-		equals: #( 'src' '  b' '    Gamma.java' )
+		equals: #( 'src/b' '  Gamma.java' )
 ]
 
 { #category : 'tests - filter' }
@@ -399,7 +400,7 @@ MMCCoveragePresenterFileTreeTest >> testFilterKeepingTheCurrentFileKeepsItSelect
 	presenter fileFilterPresenter text: 'alpha'.
 	self
 		assert: (self outlineOf: presenter)
-		equals: #( 'src' '  a' '    Alpha.java' ).
+		equals: #( 'src/a' '  Alpha.java' ).
 	self
 		assert: (self selectedNodeOf: presenter) file
 		equals: presenter currentFile
@@ -407,23 +408,24 @@ MMCCoveragePresenterFileTreeTest >> testFilterKeepingTheCurrentFileKeepsItSelect
 
 { #category : 'tests - filter' }
 MMCCoveragePresenterFileTreeTest >> testFilterKeepsTheAncestorsOfTheMatchingFiles [
+	"The ancestors src and b are kept, then compacted in src/b."
 
 	| presenter |
 	presenter := self builtPresenter.
 	presenter fileFilterPresenter text: 'gamma'.
 	self
 		assert: (self outlineOf: presenter)
-		equals: #( 'src' '  b' '    Gamma.java' )
+		equals: #( 'src/b' '  Gamma.java' )
 ]
 
 { #category : 'tests - filter' }
 MMCCoveragePresenterFileTreeTest >> testFilterKeepsTheTreeUnfolded [
-	"src, b, Gamma.java."
+	"src/b (compacted), Gamma.java."
 
 	| presenter |
 	presenter := self builtPresenter.
 	presenter fileFilterPresenter text: 'gamma'.
-	self assert: (self rowCountOf: presenter) equals: 3
+	self assert: (self rowCountOf: presenter) equals: 2
 ]
 
 { #category : 'tests - filter' }
@@ -434,7 +436,7 @@ MMCCoveragePresenterFileTreeTest >> testFilterMatchesTheRelativePathNotOnlyTheNa
 	presenter fileFilterPresenter text: 'SRC/A/'.
 	self
 		assert: (self outlineOf: presenter)
-		equals: #( 'src' '  a' '    Alpha.java' '    Beta.java' )
+		equals: #( 'src/a' '  Alpha.java' '  Beta.java' )
 ]
 
 { #category : 'tests - filter' }
@@ -473,6 +475,17 @@ MMCCoveragePresenterFileTreeTest >> testFolderLabelIsTheFolderName [
 		assert:
 		(self labelOf: presenter fileListPresenter roots first in: presenter)
 		equals: 'src'
+]
+
+{ #category : 'tests' }
+MMCCoveragePresenterFileTreeTest >> testMultiFileExampleTreeIsNotMergedWhenSrcHasTwoFolders [
+	"src has two folder children (a and b): it is not merged."
+
+	self
+		assert: (self outlineOf: self builtPresenter)
+		equals:
+			#( 'src' '  a' '    Alpha.java' '    Beta.java' '  b' '    Delta.java'
+			   '    Gamma.java' )
 ]
 
 { #category : 'tests - navigation' }

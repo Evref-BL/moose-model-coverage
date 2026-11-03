@@ -14,7 +14,7 @@ Class {
 
 { #category : 'helpers' }
 MMCCoveragePresenterTest >> assertDecoratorsMatchPlanOf: aPresenter [
-	"Every decorator has the interval of its segment and the opaque color of the palette for it."
+	"Every decorator has the (Rubric, end exclusive) interval of its segment and the opaque color of the palette for it."
 
 	| decorators segments |
 	decorators := aPresenter decorators.
@@ -25,7 +25,7 @@ MMCCoveragePresenterTest >> assertDecoratorsMatchPlanOf: aPresenter [
 			decorator := decorators at: i.
 			self
 				assert: decorator interval asArray
-				equals: segment interval asArray.
+				equals: (self expectedRubricIntervalOf: segment).
 			self
 				assert: decorator highlightColor
 				equals: (aPresenter palette colorForSegment: segment).
@@ -82,6 +82,13 @@ MMCCoveragePresenterTest >> classRegionNamed: aName from: start to: end [
 MMCCoveragePresenterTest >> detailsLinesAt: aPosition of: aPresenter [
 
 	^ (aPresenter detailsTextAt: aPosition) lines asArray
+]
+
+{ #category : 'helpers' }
+MMCCoveragePresenterTest >> expectedRubricIntervalOf: aSegment [
+	"Rubric intervals have an exclusive end: the decorator of a segment first-last covers first to: last + 1."
+
+	^ (aSegment interval first to: aSegment interval last + 1) asArray
 ]
 
 { #category : 'helpers' }
@@ -753,9 +760,9 @@ MMCCoveragePresenterTest >> testLabelPreviewReplacesLineEndsWithSpaces [
 	self assert: (label includesSubstring: ' cd')
 ]
 
-{ #category : 'tests' }
+{ #category : 'helpers' }
 MMCCoveragePresenterTest >> testNestedClassAndMethodGiveThreeDecorators [
-	"Class 1-24 containing method 6-19: segments Class 1-5, Method 6-19, Class 20-24."
+	"Class 1-24 containing method 6-19: segments Class 1-5, Method 6-19, Class 20-24; the decorators have Rubric intervals (end exclusive): 1-6, 6-20, 20-25."
 
 	| presenter |
 	presenter := self newPresenterOn: self nestedCoverage.
@@ -766,9 +773,9 @@ MMCCoveragePresenterTest >> testNestedClassAndMethodGiveThreeDecorators [
 			(presenter decorators collect: [ :each | each interval asArray ])
 				asArray
 		equals: {
-				(1 to: 5) asArray.
-				(6 to: 19) asArray.
-				(20 to: 24) asArray }.
+				(1 to: 6) asArray.
+				(6 to: 20) asArray.
+				(20 to: 25) asArray }.
 	self assertDecoratorsMatchPlanOf: presenter
 ]
 
@@ -833,9 +840,9 @@ MMCCoveragePresenterTest >> testPaletteTypeNamesAreTheTypeNamesOfTheCoverage [
 		equals: presenter fileCoverage typeNames asArray
 ]
 
-{ #category : 'tests' }
+{ #category : 'helpers' }
 MMCCoveragePresenterTest >> testPlainTextWithoutRegionIsOneUncoveredZone [
-	"'hello world' (11 characters), no region: one uncovered segment 1-11 painted with the uncovered color, one uncovered zone 1-11, 0 of 11 covered (0.0 percent), 0 of 10 significant (0.0 percent)."
+	"'hello world' (11 characters), no region: one uncovered segment 1-11 (Rubric decorator interval 1-12, end exclusive) painted with the uncovered color, one uncovered zone 1-11, 0 of 11 covered (0.0 percent), 0 of 10 significant (0.0 percent)."
 
 	| coverage presenter |
 	coverage := self newCoverageFor: 'hello world' regions: #(  ).
@@ -844,7 +851,7 @@ MMCCoveragePresenterTest >> testPlainTextWithoutRegionIsOneUncoveredZone [
 	self assert: presenter decorators size equals: 1.
 	self
 		assert: presenter decorators first interval asArray
-		equals: (1 to: 11) asArray.
+		equals: (1 to: 12) asArray.
 	self
 		assert: presenter decorators first highlightColor
 		equals: presenter palette uncoveredColor.

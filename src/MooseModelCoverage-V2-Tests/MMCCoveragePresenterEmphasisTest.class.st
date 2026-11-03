@@ -80,6 +80,13 @@ MMCCoveragePresenterEmphasisTest >> entityNamed: aString of: aPresenter [
 ]
 
 { #category : 'helpers' }
+MMCCoveragePresenterEmphasisTest >> expectedRubricIntervalOf: aSegment [
+	"Rubric intervals have an exclusive end: the decorator of a segment first-last covers first to: last + 1."
+
+	^ aSegment interval first to: aSegment interval last + 1
+]
+
+{ #category : 'helpers' }
 MMCCoveragePresenterEmphasisTest >> fileNamed: aBasename of: aPresenter [
 
 	^ aPresenter modelFiles files detect: [ :each |
@@ -359,8 +366,9 @@ MMCCoveragePresenterEmphasisTest >> testNothingSelectedLeavesEveryAlphaAtOne [
 	self assertAllOpaqueIn: presenter
 ]
 
-{ #category : 'tests' }
+{ #category : 'helpers' }
 MMCCoveragePresenterEmphasisTest >> testOneDecoratorPerSegmentWhateverTheSelection [
+	"One decorator per segment, with the Rubric interval (end exclusive) of the segment."
 
 	| presenter |
 	presenter := self betaPresenter.
@@ -375,7 +383,7 @@ MMCCoveragePresenterEmphasisTest >> testOneDecoratorPerSegmentWhateverTheSelecti
 		assert:
 		(presenter decorators collect: [ :each | each interval ]) asArray
 		equals: (presenter plan segments collect: [ :each |
-				 each interval first to: each interval last ]) asArray
+				 self expectedRubricIntervalOf: each ]) asArray
 ]
 
 { #category : 'tests - no covered segment' }

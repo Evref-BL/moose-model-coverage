@@ -8,7 +8,9 @@ Class {
 		'model',
 		'matcher',
 		'presetEntries',
-		'presetOtherFileAnchorCount'
+		'presetOtherFileAnchorCount',
+		'astralText',
+		'astralStarts'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -39,6 +41,41 @@ MMCAnchorReader class >> sourceAnchorEntriesOf: aModel [
 	"Answer the anchor -> entity associations of aModel, deduplicated by anchor, scanning the model once."
 
 	^ (self model: aModel matcher: nil) sourceAnchorEntries
+]
+
+{ #category : 'private' }
+MMCAnchorReader >> characterIndexOfUtf16: anInteger [
+	"Answer the index of the character containing the UTF-16 unit anInteger (1-based). The text must have been prepared."
+
+	| low high mid |
+	astralStarts isEmpty ifTrue: [ ^ anInteger ].
+	low := 0.
+	high := astralStarts size.
+	[ low < high ] whileTrue: [
+			mid := low + high + 1 // 2.
+			(astralStarts at: mid) < anInteger
+				ifTrue: [ low := mid ]
+				ifFalse: [ high := mid - 1 ] ].
+	^ anInteger - low
+]
+
+{ #category : 'private' }
+MMCAnchorReader >> prepareAstralStartsFor: aString [
+	"Compute once per text the UTF-16 start positions (1-based) of its astral characters. Empty when the text has none."
+
+	| extra starts |
+	astralText == aString ifTrue: [ ^ self ].
+	astralText := aString.
+	astralStarts := #(  ).
+	aString isByteString ifTrue: [ ^ self ].
+	extra := 0.
+	starts := nil.
+	1 to: aString size do: [ :i |
+			(aString at: i) codePoint > 16rFFFF ifTrue: [
+					starts ifNil: [ starts := OrderedCollection new ].
+					starts add: i + extra.
+					extra := extra + 1 ] ].
+	starts ifNotNil: [ astralStarts := starts asArray ]
 ]
 
 { #category : 'reading' }
@@ -94,7 +131,7 @@ MMCAnchorReader >> read [
 
 { #category : 'private' }
 MMCAnchorReader >> reasonToIgnore: anEntry textSize: anInteger [
-	"Answer the reason why anEntry gives no region, or nil when it is valid."
+	"Answer the reason why anEntry gives no region, or nil when it is valid. anInteger is the number of characters of the text prepared by prepareAstralStartsFor:; the anchor positions are compared to its UTF-16 length."
 
 	| anchor start end |
 	anchor := anEntry key.
@@ -104,32 +141,38 @@ MMCAnchorReader >> reasonToIgnore: anEntry textSize: anInteger [
 	end := anchor endPos.
 	(start isNil or: [ end isNil ]) ifTrue: [ ^ #nilPositions ].
 	(start < 1 or: [ start > end ]) ifTrue: [ ^ #invalidPositions ].
-	end > anInteger ifTrue: [ ^ #outOfBounds ].
+	end > (anInteger + astralStarts size) ifTrue: [ ^ #outOfBounds ].
 	anEntry value ifNil: [ ^ #noElement ].
 	^ nil
 ]
 
 { #category : 'private' }
 MMCAnchorReader >> regionOf: anEntry in: aString [
+	"Anchor positions are UTF-16 units; convert them to character indexes of aString."
 
-	| anchor |
+	| anchor start end |
 	anchor := anEntry key.
+	self prepareAstralStartsFor: aString.
+	start := self characterIndexOfUtf16: anchor startPos.
+	end := self characterIndexOfUtf16: anchor endPos.
 	^ MMCEntityRegion
 		  entity: anEntry value
 		  anchor: anchor
-		  interval: (anchor startPos to: anchor endPos)
-		  text: (aString copyFrom: anchor startPos to: anchor endPos)
+		  interval: (start to: end)
+		  text: (aString copyFrom: start to: end)
 ]
 
 { #category : 'private' }
 MMCAnchorReader >> regionsOf: anEntryCollection in: aString ignored: anIgnoredCollection [
 	"Answer the sorted regions of valid entries; add the others to anIgnoredCollection with their reason."
 
-	| regions |
+	| regions textSize |
+	self prepareAstralStartsFor: aString.
+	textSize := aString size.
 	regions := OrderedCollection new.
 	anEntryCollection do: [ :entry |
 			| reason |
-			reason := self reasonToIgnore: entry textSize: aString size.
+			reason := self reasonToIgnore: entry textSize: textSize.
 			reason
 				ifNil: [ regions add: (self regionOf: entry in: aString) ]
 				ifNotNil: [
@@ -200,4 +243,12 @@ MMCAnchorReader >> textOf: anAnchor [
 	^ anAnchor sourcesAreReadable
 		  ifTrue: [ anAnchor completeText ]
 		  ifFalse: [ '' ]
+]
+
+{ #category : 'private' }
+MMCAnchorReader >> utf16Length: aString [
+	"Answer the length of aString in UTF-16 units (the unit of FileAnchor positions)."
+
+	self prepareAstralStartsFor: aString.
+	^ aString size + astralStarts size
 ]

@@ -643,7 +643,7 @@ MMCCoveragePresenter >> applyTheme: aSymbol [
 
 { #category : 'updating' }
 MMCCoveragePresenter >> buildDecorators [
-	"One opaque decorator per segment of the plan, with the interval of the segment (inclusive, 1-based). While an entity is selected in the tree, the segments not belonging to it get the translucent alpha dimmedAlpha (dimmed colors are memoized per color, by equality, for this build)."
+	"One opaque decorator per segment of the plan. The plan interval is inclusive (1-based) but the end of a Rubric text segment is exclusive: the decorator interval is first to: last + 1 (a one-character segment would otherwise be empty). While an entity is selected in the tree, the segments not belonging to it get the translucent alpha dimmedAlpha (dimmed colors are memoized per color, by equality, for this build)."
 
 	| dimmed |
 	emphasizedEntity := self emphasizedEntityToApply.
@@ -660,7 +660,7 @@ MMCCoveragePresenter >> buildDecorators [
 						         ifAbsentPut: [ color alpha: self dimmedAlpha ] ].
 			decorators add: (SpTextPresenterDecorator forHighlight
 					 highlightColor: color;
-					 interval: (segment interval first to: segment interval last);
+					 interval: (segment interval first to: segment interval last + 1);
 					 yourself) ]
 ]
 
@@ -782,6 +782,13 @@ MMCCoveragePresenter >> clearDecorators [
 	decorators := OrderedCollection new
 ]
 
+{ #category : 'file list' }
+MMCCoveragePresenter >> compactFolders [
+	"Whether the chains of folders with a single folder child are merged in the file tree (compact folders, as in VSCode)."
+
+	^ true
+]
+
 { #category : 'files' }
 MMCCoveragePresenter >> computeAllButton [
 
@@ -816,6 +823,14 @@ MMCCoveragePresenter >> connectPresenters [
 				(selection selectedItem ifNotNil: [ :node | node file ]) ].
 	fileFilterPresenter whenTextChangedDo: [ :text |
 		self fileFilterChanged ]
+]
+
+{ #category : 'text menu' }
+MMCCoveragePresenter >> copyTextSelection [
+	"Copy the selection of the text widget to the clipboard; nothing without widget."
+
+	textPresenter hasAdapter ifFalse: [ ^ self ].
+	textPresenter adapter widget textArea editor copySelection
 ]
 
 { #category : 'files' }
@@ -1006,6 +1021,19 @@ MMCCoveragePresenter >> emphasizedEntityToApply [
 		  ifFalse: [ nil ]
 ]
 
+{ #category : 'text menu' }
+MMCCoveragePresenter >> entityAtTextPosition: aPosition [
+	"Answer the entity of the innermost region at aPosition (1-based; same rule as a left click in the text, see textSelectionChangedTo:), or nil outside the text, outside any region, without readable file or without navigator."
+
+	(fileCoverage notNil and: [
+			 navigator notNil and: [
+					 fileCoverage isReadable and: [
+							 aPosition isInteger and: [
+								 aPosition between: 1 and: fileCoverage size ] ] ] ])
+		ifFalse: [ ^ nil ].
+	^ navigator deepestEntityAt: aPosition
+]
+
 { #category : 'root folder' }
 MMCCoveragePresenter >> existingFolderFrom: anObject [
 	"Answer the FileReference of anObject (file reference, locator or path String) when it is an existing directory, else nil."
@@ -1141,6 +1169,19 @@ MMCCoveragePresenter >> fileToSwitchFor: anEntityOrNil [
 		  ifNone: [ nil ]
 ]
 
+{ #category : 'file list' }
+MMCCoveragePresenter >> fileTreeRootsOf: aCollectionOfFiles [
+	"Answer the roots of the file tree of aCollectionOfFiles, with compact folders when #compactFolders."
+
+	| roots |
+	roots := MMCFileTreeNode
+		         rootsOf: aCollectionOfFiles
+		         naming: [ :each | modelFiles relativeNameOf: each ].
+	^ self compactFolders
+		  ifTrue: [ MMCFileTreeNode compactedRoots: roots ]
+		  ifFalse: [ roots ]
+]
+
 { #category : 'files' }
 MMCCoveragePresenter >> filesSummaryPresenter [
 
@@ -1220,6 +1261,8 @@ MMCCoveragePresenter >> initializePresenters [
 	isUpdatingToggle := false.
 	textPresenter := self newText.
 	textPresenter beNotEditable.
+	textPresenter contextMenu: [
+		self textContextMenuAt: self mouseTextPosition ].
 	uncoveredListPresenter := self instantiate: SpListPresenter.
 	uncoveredListPresenter display: [ :region |
 		self labelForUncoveredRegion: region ].
@@ -1332,6 +1375,15 @@ MMCCoveragePresenter >> modelFiles [
 	"Answer the inventory of the source files of the model (MMCModelFiles), nil for a presenter without file selector."
 
 	^ modelFiles
+]
+
+{ #category : 'text menu' }
+MMCCoveragePresenter >> mouseTextPosition [
+	"Answer the text position under the mouse (nil when none, see textPositionAtGlobalPoint:). Rubric builds the context menu on the mouse down of the right click, so the hand is still on the clicked point."
+
+	textPresenter hasAdapter ifFalse: [ ^ nil ].
+	^ self textPositionAtGlobalPoint:
+		  textPresenter adapter widget textArea currentHand position
 ]
 
 { #category : 'details' }
@@ -1599,14 +1651,12 @@ MMCCoveragePresenter >> refreshFileButtons [
 		(hasFiles and: [ index < modelFiles fileCount ])
 ]
 
-{ #category : 'initialization' }
+{ #category : 'file list' }
 MMCCoveragePresenter >> refreshFileList [
-	"Rebuild the file tree from the visible files (folders unfolded, leaves labelled with their coverage) and select the current file when it is visible, without reacting to the selection."
+	"Rebuild the file tree from the visible files (folders unfolded and compacted, leaves labelled with their coverage) and select the current file when it is visible, without reacting to the selection."
 
 	| roots node |
-	roots := MMCFileTreeNode
-		         rootsOf: self visibleFiles
-		         naming: [ :each | modelFiles relativeNameOf: each ].
+	roots := self fileTreeRootsOf: self visibleFiles.
 	self indexFileNodes: roots.
 	isUpdatingFileList := true.
 	[
@@ -1958,6 +2008,69 @@ MMCCoveragePresenter >> synchronizingDo: aBlock [
 	previous := self isSynchronizing.
 	isSynchronizing := true.
 	aBlock ensure: [ isSynchronizing := previous ]
+]
+
+{ #category : 'text menu' }
+MMCCoveragePresenter >> textContextMenuAt: aPosition [
+	"Answer a new menu for a right click at aPosition (1-based, nil when the mouse is over no character): Inspect (first; enabled when an entity of the model is at aPosition, see entityAtTextPosition:; it inspects that entity with inspectAction, without moving the selection) then Copy (enabled when text is selected)."
+
+	| menu entity |
+	entity := self entityAtTextPosition: aPosition.
+	menu := SpMenuPresenter new.
+	menu addGroup: [ :group |
+			group
+				addItem: [ :item |
+						item
+							name: 'Inspect';
+							enabled: entity notNil;
+							action: [
+								entity ifNotNil: [ self inspectAction value: entity ] ] ];
+				addItem: [ :item |
+						item
+							name: 'Copy';
+							enabled: self textHasSelection;
+							action: [ self copyTextSelection ] ] ].
+	^ menu
+]
+
+{ #category : 'text menu' }
+MMCCoveragePresenter >> textHasSelection [
+	"Answer true when the text widget (built) has a non-empty selection."
+
+	textPresenter hasAdapter ifFalse: [ ^ false ].
+	^ [ textPresenter adapter widget textArea editor hasSelection ]
+		  on: Error
+		  do: [ :error | false ]
+]
+
+{ #category : 'text menu' }
+MMCCoveragePresenter >> textPositionAtGlobalPoint: aPoint [
+	"Answer the 1-based position of the character under aPoint (world coordinates) in the text widget, or nil without widget, outside the visible text widget, on the blank right of a line, below the last line or on a line break. The area lives in a scrolled transform: globalPointToLocal: gives the paragraph coordinates. characterBlockAtPoint: answers the nearest caret position (the next character when the point is in the right half of a character): it is corrected to the character actually under the point. Never fails."
+
+	textPresenter hasAdapter ifFalse: [ ^ nil ].
+	^ [
+		  | widget area local paragraph block index next |
+		  widget := textPresenter adapter widget.
+		  area := widget textArea.
+		  (widget bounds containsPoint: aPoint) ifFalse: [ ^ nil ].
+		  local := area globalPointToLocal: aPoint.
+		  paragraph := area paragraph.
+		  block := paragraph characterBlockAtPoint: local.
+		  index := block stringIndex.
+		  (local x < block left and: [ index > 1 ]) ifTrue: [
+				  (paragraph characterBlockForIndex: index - 1) top = block top
+					  ifTrue: [ index := index - 1 ] ].
+		  (index between: 1 and: area text size) ifFalse: [ ^ nil ].
+		  (#( 10 13 ) includes: (area text at: index) asInteger) ifTrue: [
+			  ^ nil ].
+		  block := paragraph characterBlockForIndex: index.
+		  (local y between: block top and: block bottom) ifFalse: [ ^ nil ].
+		  next := paragraph characterBlockForIndex: index + 1.
+		  (next top = block top and: [ local x >= next left ]) ifTrue: [
+			  ^ nil ].
+		  index ]
+		  on: Error
+		  do: [ :error | nil ]
 ]
 
 { #category : 'accessing' }
