@@ -1,16 +1,31 @@
 "
-I read the file designated by a matcher once and extract, for each matching indexed file anchor of a model, the text region of its entity. Invalid anchors are reported, never clamped.
+I read the file designated by a matcher once and extract, for each matching indexed file anchor of a model, the text region of its entity. Invalid anchors are reported, never clamped. Without pre-computed entries I scan the model; with model:file:entries:otherFileAnchorCount: I only use the given entries (see MMCModelFiles), so no scan is done.
 "
 Class {
 	#name : 'MMCAnchorReader',
 	#superclass : 'Object',
 	#instVars : [
 		'model',
-		'matcher'
+		'matcher',
+		'presetEntries',
+		'presetOtherFileAnchorCount',
+		'astralText',
+		'astralStarts'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
 }
+
+{ #category : 'instance creation' }
+MMCAnchorReader class >> model: aModel file: aFile entries: aCollection otherFileAnchorCount: anInteger [
+	"Answer a reader of aFile that does not scan aModel: aCollection holds the anchor -> entity associations to consider (those of aFile and the non file anchors), anInteger the number of file anchors of other files."
+
+	^ (self
+		   model: aModel
+		   matcher: (MMCCanonicalPathMatcher forFile: aFile))
+		  setEntries: aCollection otherFileAnchorCount: anInteger;
+		  yourself
+]
 
 { #category : 'instance creation' }
 MMCAnchorReader class >> model: aModel matcher: aFileMatcher [
@@ -21,6 +36,48 @@ MMCAnchorReader class >> model: aModel matcher: aFileMatcher [
 		  yourself
 ]
 
+{ #category : 'instance creation' }
+MMCAnchorReader class >> sourceAnchorEntriesOf: aModel [
+	"Answer the anchor -> entity associations of aModel, deduplicated by anchor, scanning the model once."
+
+	^ (self model: aModel matcher: nil) sourceAnchorEntries
+]
+
+{ #category : 'private' }
+MMCAnchorReader >> characterIndexOfUtf16: anInteger [
+	"Answer the index of the character containing the UTF-16 unit anInteger (1-based). The text must have been prepared."
+
+	| low high mid |
+	astralStarts isEmpty ifTrue: [ ^ anInteger ].
+	low := 0.
+	high := astralStarts size.
+	[ low < high ] whileTrue: [
+			mid := low + high + 1 // 2.
+			(astralStarts at: mid) < anInteger
+				ifTrue: [ low := mid ]
+				ifFalse: [ high := mid - 1 ] ].
+	^ anInteger - low
+]
+
+{ #category : 'private' }
+MMCAnchorReader >> prepareAstralStartsFor: aString [
+	"Compute once per text the UTF-16 start positions (1-based) of its astral characters. Empty when the text has none."
+
+	| extra starts |
+	astralText == aString ifTrue: [ ^ self ].
+	astralText := aString.
+	astralStarts := #(  ).
+	aString isByteString ifTrue: [ ^ self ].
+	extra := 0.
+	starts := nil.
+	1 to: aString size do: [ :i |
+			(aString at: i) codePoint > 16rFFFF ifTrue: [
+					starts ifNil: [ starts := OrderedCollection new ].
+					starts add: i + extra.
+					extra := extra + 1 ] ].
+	starts ifNotNil: [ astralStarts := starts asArray ]
+]
+
 { #category : 'reading' }
 MMCAnchorReader >> read [
 	"Read the matched file once and answer an MMCAnchorReadResult.
@@ -29,7 +86,7 @@ MMCAnchorReader >> read [
 	| ignored matched inFile otherFileAnchorCount file text |
 	ignored := OrderedCollection new.
 	matched := OrderedCollection new.
-	otherFileAnchorCount := 0.
+	otherFileAnchorCount := presetOtherFileAnchorCount ifNil: [ 0 ].
 	self sourceAnchorEntries do: [ :entry |
 			entry key isFileAnchor
 				ifFalse: [
@@ -74,7 +131,7 @@ MMCAnchorReader >> read [
 
 { #category : 'private' }
 MMCAnchorReader >> reasonToIgnore: anEntry textSize: anInteger [
-	"Answer the reason why anEntry gives no region, or nil when it is valid."
+	"Answer the reason why anEntry gives no region, or nil when it is valid. anInteger is the number of characters of the text prepared by prepareAstralStartsFor:; the anchor positions are compared to its UTF-16 length."
 
 	| anchor start end |
 	anchor := anEntry key.
@@ -84,32 +141,38 @@ MMCAnchorReader >> reasonToIgnore: anEntry textSize: anInteger [
 	end := anchor endPos.
 	(start isNil or: [ end isNil ]) ifTrue: [ ^ #nilPositions ].
 	(start < 1 or: [ start > end ]) ifTrue: [ ^ #invalidPositions ].
-	end > anInteger ifTrue: [ ^ #outOfBounds ].
+	end > (anInteger + astralStarts size) ifTrue: [ ^ #outOfBounds ].
 	anEntry value ifNil: [ ^ #noElement ].
 	^ nil
 ]
 
 { #category : 'private' }
 MMCAnchorReader >> regionOf: anEntry in: aString [
+	"Anchor positions are UTF-16 units; convert them to character indexes of aString."
 
-	| anchor |
+	| anchor start end |
 	anchor := anEntry key.
+	self prepareAstralStartsFor: aString.
+	start := self characterIndexOfUtf16: anchor startPos.
+	end := self characterIndexOfUtf16: anchor endPos.
 	^ MMCEntityRegion
 		  entity: anEntry value
 		  anchor: anchor
-		  interval: (anchor startPos to: anchor endPos)
-		  text: (aString copyFrom: anchor startPos to: anchor endPos)
+		  interval: (start to: end)
+		  text: (aString copyFrom: start to: end)
 ]
 
 { #category : 'private' }
 MMCAnchorReader >> regionsOf: anEntryCollection in: aString ignored: anIgnoredCollection [
 	"Answer the sorted regions of valid entries; add the others to anIgnoredCollection with their reason."
 
-	| regions |
+	| regions textSize |
+	self prepareAstralStartsFor: aString.
+	textSize := aString size.
 	regions := OrderedCollection new.
 	anEntryCollection do: [ :entry |
 			| reason |
-			reason := self reasonToIgnore: entry textSize: aString size.
+			reason := self reasonToIgnore: entry textSize: textSize.
 			reason
 				ifNil: [ regions add: (self regionOf: entry in: aString) ]
 				ifNotNil: [
@@ -135,6 +198,14 @@ MMCAnchorReader >> resultFile: aFile text: aString regions: aRegionCollection ig
 		  otherFileAnchorCount: anInteger
 ]
 
+{ #category : 'reading' }
+MMCAnchorReader >> setEntries: aCollection otherFileAnchorCount: anInteger [
+	"Use aCollection of anchor -> entity associations instead of scanning the model; anInteger file anchors designating other files are added to the count of those seen in aCollection."
+
+	presetEntries := aCollection.
+	presetOtherFileAnchorCount := anInteger
+]
+
 { #category : 'private' }
 MMCAnchorReader >> setModel: aModel matcher: aFileMatcher [
 
@@ -142,18 +213,26 @@ MMCAnchorReader >> setModel: aModel matcher: aFileMatcher [
 	matcher := aFileMatcher
 ]
 
-{ #category : 'private' }
+{ #category : 'reading' }
 MMCAnchorReader >> sourceAnchorEntries [
-	"Answer associations anchor -> entity for the file-level anchors of the model; multiple anchors are unrolled."
+	"Answer associations anchor -> entity for the file-level anchors of the model; multiple anchors are unrolled. When the reader was given pre-computed entries, answer them without scanning the model.
+	A leaf of a multiple anchor may be visited before its multiple anchor, when it has no entity yet: the entity is then completed when the multiple anchor is visited."
 
 	| seen entries |
-	seen := IdentitySet new.
+	presetEntries ifNotNil: [ :preset | ^ preset ].
+	seen := IdentityDictionary new.
 	entries := OrderedCollection new.
 	(model allUsing: FamixTSourceAnchor) do: [ :anchor |
 			anchor allSourceAnchors do: [ :leaf |
-					(seen includes: leaf) ifFalse: [
-							seen add: leaf.
-							entries add: leaf -> (leaf element ifNil: [ anchor element ]) ] ] ].
+					| entity entry |
+					entity := leaf element ifNil: [ anchor element ].
+					entry := seen at: leaf ifAbsent: [ nil ].
+					entry
+						ifNil: [
+								entry := leaf -> entity.
+								seen at: leaf put: entry.
+								entries add: entry ]
+						ifNotNil: [ entry value ifNil: [ entry value: entity ] ] ] ].
 	^ entries
 ]
 
@@ -164,4 +243,12 @@ MMCAnchorReader >> textOf: anAnchor [
 	^ anAnchor sourcesAreReadable
 		  ifTrue: [ anAnchor completeText ]
 		  ifFalse: [ '' ]
+]
+
+{ #category : 'private' }
+MMCAnchorReader >> utf16Length: aString [
+	"Answer the length of aString in UTF-16 units (the unit of FileAnchor positions)."
+
+	self prepareAstralStartsFor: aString.
+	^ aString size + astralStarts size
 ]

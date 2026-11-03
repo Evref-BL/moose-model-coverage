@@ -1,3 +1,9 @@
+"
+DEPRECATED - use MMCCoveragePresenter (package MooseModelCoverage-V2) instead. This V1 presenter is kept for backward compatibility only.
+V2 usage: MMCCoveragePresenter openOn: aMooseModel file: aFileName.
+
+I am the V1 Spec presenter displaying the results of a CodeCoverageAnalyzer.
+"
 Class {
 	#name : 'CoverageUIBuilder',
 	#superclass : 'SpPresenter',
