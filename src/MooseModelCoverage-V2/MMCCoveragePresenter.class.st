@@ -69,7 +69,9 @@ Class {
 		'isUpdatingFileList',
 		'openFileAction',
 		'setRootFolderButton',
-		'rootFolderChooser'
+		'rootFolderChooser',
+		'emphasizedEntity',
+		'fileNodes'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -576,6 +578,21 @@ MMCCoveragePresenter class >> writeExampleFile: anAssociation in: aFolder [
 ]
 
 { #category : 'synchronisation' }
+MMCCoveragePresenter >> alignFileTreeWidgetOn: aNode [
+	"Make the row selected in the FastTable of the file tree the row of aNode (see #alignTreeWidgetOn:). Does nothing without widget or when aNode has no row."
+
+	| table source row |
+	aNode ifNil: [ ^ self ].
+	fileListPresenter hasAdapter ifFalse: [ ^ self ].
+	table := fileListPresenter adapter widget.
+	source := table dataSource.
+	row := (1 to: source numberOfRows)
+		       detect: [ :each | (source elementAt: each) data == aNode ]
+		       ifNone: [ ^ self ].
+	table selectedIndex = row ifFalse: [ table selectIndex: row ]
+]
+
+{ #category : 'synchronisation' }
 MMCCoveragePresenter >> alignTreeWidgetOn: anEntity [
 	"Make the row selected in the FastTable widget the row of anEntity. After a file switch triggered by a real click, FastTable reapplies its OLD row index on the rebuilt tree, so the visible selection (and the Spec selection that follows it) is another entity. Does nothing without widget or when anEntity has no row."
 
@@ -626,12 +643,23 @@ MMCCoveragePresenter >> applyTheme: aSymbol [
 
 { #category : 'updating' }
 MMCCoveragePresenter >> buildDecorators [
-	"One opaque decorator per segment of the plan, with the interval of the segment (inclusive, 1-based)."
+	"One opaque decorator per segment of the plan, with the interval of the segment (inclusive, 1-based). While an entity is selected in the tree, the segments not belonging to it get the translucent alpha dimmedAlpha (dimmed colors are memoized per color, by equality, for this build)."
 
+	| dimmed |
+	emphasizedEntity := self emphasizedEntityToApply.
+	dimmed := Dictionary new.
 	decorators := OrderedCollection new.
 	plan segments do: [ :segment |
+			| color |
+			color := palette colorForSegment: segment.
+			(emphasizedEntity notNil and: [
+				 segment isUncovered or: [
+					 segment region entity ~~ emphasizedEntity ] ]) ifTrue: [
+					color := dimmed
+						         at: color
+						         ifAbsentPut: [ color alpha: self dimmedAlpha ] ].
 			decorators add: (SpTextPresenterDecorator forHighlight
-					 highlightColor: (palette colorForSegment: segment);
+					 highlightColor: color;
 					 interval: (segment interval first to: segment interval last);
 					 yourself) ]
 ]
@@ -648,13 +676,19 @@ MMCCoveragePresenter >> buildDerivedState [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> buildFileWidgets [
-	"Create the file selector widgets (filter, list, buttons, global summary) and the root folder button. Without inventory they are disabled."
+	"Create the file selector widgets (filter, file tree, buttons, global summary) and the root folder button. Without inventory they are disabled."
 
 	isUpdatingFileList := false.
 	fileFilterPresenter := self newTextInput.
 	fileFilterPresenter placeholder: 'Filter files'.
-	fileListPresenter := self instantiate: SpListPresenter.
-	fileListPresenter display: [ :file | self fileLabelFor: file ].
+	fileListPresenter := self instantiate: SpTreeTablePresenter.
+	fileListPresenter
+		addColumn: (SpStringTableColumn new
+				 title: 'File';
+				 evaluated: [ :each | self fileNodeLabelFor: each ];
+				 yourself);
+		children: [ :each | each children ].
+	fileListPresenter hideColumnHeaders.
 	previousFileButton := self newButton.
 	previousFileButton
 		label: 'Previous';
@@ -765,10 +799,12 @@ MMCCoveragePresenter >> computeAllFiles [
 
 { #category : 'initialization' }
 MMCCoveragePresenter >> connectPresenters [
-	"Wire the events: the decorations when the text widget is built, the cursor when the window is displayed, the tree selection (once), the table selection, the whole model check box, the file list and the file filter."
+	"Wire the events: the decorations when the text widget is built, the cursor when the window is displayed, the tree selection (once), the table selection, the whole model check box, the file tree and the file filter."
 
 	textPresenter whenBuiltDo: [ self textWidgetBuilt ].
-	self whenDisplayDo: [ self subscribeToCursor ].
+	self whenDisplayDo: [
+		self subscribeToCursor.
+		self expandFileTree ].
 	treePresenter whenSelectionChangedDo: [ :selection |
 		self treeSelectionChangedTo: selection selectedItem ].
 	uncoveredListPresenter whenSelectionChangedDo: [ :selection |
@@ -776,7 +812,8 @@ MMCCoveragePresenter >> connectPresenters [
 	wholeModelTogglePresenter whenChangedDo: [ :state |
 		self toggleChanged: state ].
 	fileListPresenter whenSelectionChangedDo: [ :selection |
-		self fileListSelectionChangedTo: selection selectedItem ].
+			self fileListSelectionChangedTo:
+				(selection selectedItem ifNotNil: [ :node | node file ]) ].
 	fileFilterPresenter whenTextChangedDo: [ :text |
 		self fileFilterChanged ]
 ]
@@ -864,6 +901,15 @@ MMCCoveragePresenter >> defaultRootFolderChooser [
 ]
 
 { #category : 'synchronisation' }
+MMCCoveragePresenter >> deferFileTreeRealignment [
+	"The roots of the file tree are rebuilt during a click on it, and FastTable then reapplies its old row index. Realign the selection on the current file when the event is over (see #deferTreeRealignmentOn:)."
+
+	fileListPresenter hasAdapter ifFalse: [ ^ self ].
+	self application defer: [
+		self isSynchronizing ifFalse: [ self realignFileTreeSelection ] ]
+]
+
+{ #category : 'synchronisation' }
 MMCCoveragePresenter >> deferTreeRealignmentOn: anEntity [
 	"A real click selects the row, our callback rebuilds the tree, and FastTable then reapplies its old row index. Realign the selection when the event is over, as a deferred UI message of the application (next Morphic cycle, no delay)."
 
@@ -939,6 +985,27 @@ MMCCoveragePresenter >> detectedThemeFor: aBackgroundColor [
 	^ MMCColorPalette themeForBackground: color
 ]
 
+{ #category : 'updating' }
+MMCCoveragePresenter >> dimmedAlpha [
+	"Alpha given to the highlights of the entities other than the selected one while an entity is selected (the selected one keeps the alpha of its color). Lower is more transparent. Change it here."
+
+	^ 0.25
+]
+
+{ #category : 'updating' }
+MMCCoveragePresenter >> emphasizedEntityToApply [
+	"Answer the entity to put forward in the text: the selected one of the tree when it has at least one segment in the plan of the current file, else nil (nothing is dimmed)."
+
+	| selected |
+	treePresenter ifNil: [ ^ nil ].
+	selected := self selectedEntityInTree.
+	selected ifNil: [ ^ nil ].
+	^ (plan segments anySatisfy: [ :segment |
+		   segment isUncovered not and: [ segment region entity == selected ] ])
+		  ifTrue: [ selected ]
+		  ifFalse: [ nil ]
+]
+
 { #category : 'root folder' }
 MMCCoveragePresenter >> existingFolderFrom: anObject [
 	"Answer the FileReference of anObject (file reference, locator or path String) when it is an existing directory, else nil."
@@ -957,10 +1024,33 @@ MMCCoveragePresenter >> existingFolderFrom: anObject [
 		  ifFalse: [ nil ]
 ]
 
+{ #category : 'files' }
+MMCCoveragePresenter >> expandFileTree [
+	"Unfold every folder of the file tree once it is displayed (the expansion is ignored without widget) and keep the current file selected. The selection is cleared during the expansion: FastTable updates the selection at each expanded item, which is superlinear with a selected leaf."
+
+	fileListPresenter hasAdapter ifFalse: [ ^ self ].
+	self synchronizingDo: [
+			isUpdatingFileList := true.
+			[
+				fileListPresenter unselectAll.
+				fileListPresenter expandAll ] ensure: [
+				isUpdatingFileList := false ] ].
+	self realignFileTreeSelection
+]
+
 { #category : 'accessing' }
 MMCCoveragePresenter >> fileCoverage [
 
 	^ fileCoverage
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileCoverageInfoFor: aFile [
+	"Answer the coverage information of aFile: '?' until computed, 'P%' once computed, 'unreadable' with a warning sign when it cannot be read."
+
+	(modelFiles isReadable: aFile) ifFalse: [
+		^ (String with: (Character value: 16r26A0)) , ' unreadable' ].
+	^ self percentageLabelOf: (modelFiles summaryFor: aFile)
 ]
 
 { #category : 'files' }
@@ -979,15 +1069,10 @@ MMCCoveragePresenter >> fileFilterPresenter [
 
 { #category : 'files' }
 MMCCoveragePresenter >> fileLabelFor: aFile [
-	"Answer the label of aFile in the list: '<relative>  ?' until computed, '<relative>  P%' once computed, '<relative>  (warning sign) unreadable' when it cannot be read."
+	"Answer the full label of aFile: '<relative>  ?' until computed, '<relative>  P%' once computed, '<relative>  (warning sign) unreadable' when it cannot be read."
 
-	| name |
-	name := modelFiles relativeNameOf: aFile.
-	(modelFiles isReadable: aFile) ifFalse: [
-			^ name , '  ' , (String with: (Character value: 16r26A0))
-			  , ' unreadable' ].
-	^ name , '  '
-	  , (self percentageLabelOf: (modelFiles summaryFor: aFile))
+	^ (modelFiles relativeNameOf: aFile) , '  '
+	  , (self fileCoverageInfoFor: aFile)
 ]
 
 { #category : 'files' }
@@ -1003,6 +1088,21 @@ MMCCoveragePresenter >> fileListSelectionChangedTo: aFileOrNil [
 	(isUpdatingFileList == true or: [ aFileOrNil isNil ]) ifTrue: [
 		^ self ].
 	self showFile: aFileOrNil
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileNodeLabelFor: aNode [
+	"Answer the label of a node of the file tree: the folder name, or the file name followed by its coverage information (see #fileCoverageInfoFor:)."
+
+	aNode isFolder ifTrue: [ ^ aNode name ].
+	^ aNode name , '  ' , (self fileCoverageInfoFor: aNode file)
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> fileNodeOf: aFile [
+	"Answer the leaf of the file tree for aFile, nil when it is not visible with the current filter."
+
+	^ fileNodes ifNotNil: [ :nodes | nodes at: aFile ifAbsent: [ nil ] ]
 ]
 
 { #category : 'initialization' }
@@ -1088,6 +1188,21 @@ MMCCoveragePresenter >> globalSummaryText [
 						   ifNil: [ '?' ]
 						   ifNotNil: [ :percentage |
 							   (self formatPercentage: percentage) , '%' ]) ]
+]
+
+{ #category : 'files' }
+MMCCoveragePresenter >> indexFileNodes: aCollectionOfRoots [
+	"Remember the leaf of every file of the tree."
+
+	| pending |
+	fileNodes := Dictionary new.
+	pending := OrderedCollection withAll: aCollectionOfRoots.
+	[ pending isEmpty ] whileFalse: [
+			| node |
+			node := pending removeLast.
+			node isFile
+				ifTrue: [ fileNodes at: node file put: node ]
+				ifFalse: [ pending addAll: node children ] ]
 ]
 
 { #category : 'initialization' }
@@ -1194,13 +1309,14 @@ MMCCoveragePresenter >> labelForUncoveredRegion: aRegion [
 
 { #category : 'root folder' }
 MMCCoveragePresenter >> loadFile: aFile [
-	"Show the coverage of aFile, a file of the inventory, even when it is the current file (used after a change of the inventory). The tree selection is kept when its entity is still visible."
+	"Show the coverage of aFile, a file of the inventory, even when it is the current file (used after a change of the inventory). The tree selection is kept when its entity is still visible, and so is its emphasis."
 
 	| selected |
 	selected := self selectedEntityInTree.
 	currentFile := aFile.
 	self updateFileCoverage: (modelFiles coverageFor: aFile).
 	self synchronizingDo: [ self selectEntityInTree: selected ].
+	self refreshEmphasis.
 	self refreshFileWidgets
 ]
 
@@ -1434,12 +1550,37 @@ MMCCoveragePresenter >> putUncoveredDetailsAt: aPosition on: aStream [
 ]
 
 { #category : 'synchronisation' }
+MMCCoveragePresenter >> realignFileTreeSelection [
+	"Select the leaf of the current file again in the file tree and align the FastTable row on it, without echo."
+
+	| node |
+	node := self fileNodeOf: currentFile.
+	node ifNil: [ ^ self ].
+	self synchronizingDo: [
+			isUpdatingFileList := true.
+			[
+				fileListPresenter selectPathByItems: node pathFromRoot.
+				self alignFileTreeWidgetOn: node ] ensure: [
+				isUpdatingFileList := false ] ]
+]
+
+{ #category : 'synchronisation' }
 MMCCoveragePresenter >> realignTreeSelectionOn: anEntity [
-	"Select anEntity again in the tree and align the FastTable row on it, without echo. Used once the click event is over (see deferTreeRealignmentOn:)."
+	"Select anEntity again in the tree and align the FastTable row on it, without echo, then put it forward (the selection was not yet right when the file switched). Used once the click event is over (see deferTreeRealignmentOn:)."
 
 	self synchronizingDo: [
 			self selectPathOf: anEntity.
-			self alignTreeWidgetOn: anEntity ]
+			self alignTreeWidgetOn: anEntity ].
+	self refreshEmphasis
+]
+
+{ #category : 'updating' }
+MMCCoveragePresenter >> refreshEmphasis [
+	"The selection may have changed: when the entity to put forward is no longer the applied one, re-apply the colors (no coverage recomputation)."
+
+	plan ifNil: [ ^ self ].
+	self emphasizedEntityToApply == emphasizedEntity ifTrue: [ ^ self ].
+	self refreshHighlights
 ]
 
 { #category : 'files' }
@@ -1458,18 +1599,25 @@ MMCCoveragePresenter >> refreshFileButtons [
 		(hasFiles and: [ index < modelFiles fileCount ])
 ]
 
-{ #category : 'files' }
+{ #category : 'initialization' }
 MMCCoveragePresenter >> refreshFileList [
-	"Show the visible files with their labels and select the current file when it is visible, without reacting to the selection."
+	"Rebuild the file tree from the visible files (folders unfolded, leaves labelled with their coverage) and select the current file when it is visible, without reacting to the selection."
 
-	| shown |
-	shown := self visibleFiles.
+	| roots node |
+	roots := MMCFileTreeNode
+		         rootsOf: self visibleFiles
+		         naming: [ :each | modelFiles relativeNameOf: each ].
+	self indexFileNodes: roots.
 	isUpdatingFileList := true.
 	[
-		fileListPresenter items: shown.
-		(modelFiles notNil and: [ shown includes: currentFile ]) ifTrue: [
-			fileListPresenter selectItem: currentFile ] ] ensure: [
-		isUpdatingFileList := false ]
+		fileListPresenter roots: roots.
+		fileListPresenter hasAdapter ifTrue: [ fileListPresenter expandAll ].
+		node := self fileNodeOf: currentFile.
+		(modelFiles notNil and: [ node notNil ])
+			ifTrue: [ fileListPresenter selectPathByItems: node pathFromRoot ]
+			ifFalse: [ fileListPresenter unselectAll ] ] ensure: [
+		isUpdatingFileList := false ].
+	self deferFileTreeRealignment
 ]
 
 { #category : 'file navigation' }
@@ -1598,9 +1746,11 @@ MMCCoveragePresenter >> selectUncoveredRegion: aRegion [
 
 { #category : 'tree' }
 MMCCoveragePresenter >> selectedEntityInTree [
-	"Answer the entity selected in the tree, or nil."
+	"Answer the entity selected in the tree, or nil. The selection may be stale while the tree roots are rebuilt (its path no longer exists): nil then."
 
-	^ treePresenter selection selectedItem
+	^ [ treePresenter selection selectedItem ]
+		  on: SubscriptOutOfBounds
+		  do: [ :error | nil ]
 ]
 
 { #category : 'cursor' }
@@ -1778,7 +1928,7 @@ MMCCoveragePresenter >> summaryText [
 
 { #category : 'files' }
 MMCCoveragePresenter >> switchToFile: aFile selecting: anEntity [
-	"Show aFile, then select the first region of anEntity in the text and the entity in the tree, without echo. The row of the FastTable is realigned once the click event is over (see deferTreeRealignmentOn:)."
+	"Show aFile, then select the first region of anEntity in the text and the entity in the tree, without echo, and put the entity forward (see refreshEmphasis). The row of the FastTable is realigned once the click event is over (see deferTreeRealignmentOn:)."
 
 	self synchronizingDo: [
 			self showFile: aFile.
@@ -1786,6 +1936,7 @@ MMCCoveragePresenter >> switchToFile: aFile selecting: anEntity [
 			(navigator firstRegionOf: anEntity) ifNotNil: [ :region |
 				textPresenter selectionInterval: region interval ].
 			detailsPresenter text: (self detailsTextFor: anEntity) ].
+	self refreshEmphasis.
 	self deferTreeRealignmentOn: anEntity
 ]
 
@@ -1817,7 +1968,7 @@ MMCCoveragePresenter >> textPresenter [
 
 { #category : 'synchronisation' }
 MMCCoveragePresenter >> textSelectionChangedTo: anInterval [
-	"The text selection changed: select in the tree the deepest entity at the start of anInterval and show its details; when there is none, clear the tree selection and show the details of the position. A nil interval is ignored. An interval that is exactly a region of the selected entity is the echo of the tree selection: ignored (Engine and its attribute share the same first character)."
+	"The text selection changed: select in the tree the deepest entity at the start of anInterval and show its details; when there is none, clear the tree selection and show the details of the position. The emphasis of the selected entity is then re-applied (nothing selected: default alphas). A nil interval is ignored. An interval that is exactly a region of the selected entity is the echo of the tree selection: ignored (Engine and its attribute share the same first character)."
 
 	| position entity |
 	anInterval ifNil: [ ^ self ].
@@ -1835,7 +1986,8 @@ MMCCoveragePresenter >> textSelectionChangedTo: anInterval [
 			ifNotNil: [
 					self selectEntityInTree: entity.
 					detailsPresenter text: (self detailsTextFor: entity) ] ] ensure: [
-		isSynchronizing := false ]
+		isSynchronizing := false ].
+	self refreshEmphasis
 ]
 
 { #category : 'updating' }
@@ -1965,12 +2117,13 @@ MMCCoveragePresenter >> treePresenter [
 
 { #category : 'synchronisation' }
 MMCCoveragePresenter >> treeSelectionChangedTo: anEntityOrNil [
-	"The tree selection changed. When the entity has no region in the current file but has some in another file, switch to the first such file and select its first region (see switchToFile:selecting:). Otherwise select the first region of the entity in the text (unchanged when it has none) and show its details."
+	"The tree selection changed by the user: re-apply the emphasis of the selected entity (see refreshEmphasis), except when a file switch follows, which rebuilds the highlights itself. Then, when the entity has no region in the current file but has some in another file, switch to the first such file and select its first region (see switchToFile:selecting:). Otherwise select the first region of the entity in the text (unchanged when it has none) and show its details. Selections made by the synchronisation (click in the text, file switch) are ignored here: they refresh the emphasis themselves."
 
 	| file |
 	self isSynchronizing ifTrue: [ ^ self ].
 	file := self fileToSwitchFor: anEntityOrNil.
 	file ifNotNil: [ ^ self switchToFile: file selecting: anEntityOrNil ].
+	self refreshEmphasis.
 	self synchronizingDo: [
 			anEntityOrNil ifNotNil: [
 					(navigator firstRegionOf: anEntityOrNil) ifNotNil: [ :region |

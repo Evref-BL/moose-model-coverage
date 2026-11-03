@@ -33,6 +33,13 @@ MMCCoveragePresenterFilesTest >> addClass: aName on: aFileName from: start to: e
 ]
 
 { #category : 'helpers' }
+MMCCoveragePresenterFilesTest >> buildFileTreeOf: aPresenter [
+	"Build the widget of the file tree without opening a window: the selection of a SpTreeTablePresenter is only applied once its adapter exists (see selectPathByItems:)."
+
+	aPresenter fileListPresenter build
+]
+
+{ #category : 'helpers' }
 MMCCoveragePresenterFilesTest >> buildFullyCoveredFixture [
 	"p.txt and q.txt, 10 chars each, entirely covered (no uncovered zone)."
 
@@ -97,6 +104,23 @@ MMCCoveragePresenterFilesTest >> file: aFileName [
 ]
 
 { #category : 'helpers' }
+MMCCoveragePresenterFilesTest >> fileItemsOf: aPresenter [
+	"Files of the leaves of the file tree, flattened in the order of the tree (folders first, then alphabetical)."
+
+	| result pending |
+	result := OrderedCollection new.
+	pending := OrderedCollection withAll:
+		           aPresenter fileListPresenter roots.
+	[ pending isEmpty ] whileFalse: [
+			| node |
+			node := pending removeFirst.
+			node isFile
+				ifTrue: [ result add: node file ]
+				ifFalse: [ pending addAllFirst: node children ] ].
+	^ result
+]
+
+{ #category : 'helpers' }
 MMCCoveragePresenterFilesTest >> isInactive: aWidget [
 	"A file widget of a presenter without inventory is disabled or hidden."
 
@@ -105,10 +129,10 @@ MMCCoveragePresenterFilesTest >> isInactive: aWidget [
 
 { #category : 'helpers' }
 MMCCoveragePresenterFilesTest >> labelsOf: aPresenter [
-	"Labels of the items of the file list, in order."
+	"Full labels (see fileLabelFor:) of the files of the file tree, the leaves flattened in the order of the tree."
 
-	^ aPresenter fileListPresenter items collect: [ :each |
-		  aPresenter fileLabelFor: each ]
+	^ ((self fileItemsOf: aPresenter) collect: [ :each |
+		   aPresenter fileLabelFor: each ]) asArray
 ]
 
 { #category : 'helpers' }
@@ -123,6 +147,22 @@ MMCCoveragePresenterFilesTest >> newPresenter [
 	"Not opened presenter on the inventory of the model (current file: the first sorted file). Registered to be closed in tearDown."
 
 	^ presenters add: (MMCCoveragePresenter forModel: model)
+]
+
+{ #category : 'helpers' }
+MMCCoveragePresenterFilesTest >> selectFileInList: aFile of: aPresenter [
+	"Select the leaf of aFile in the file tree, as a click would do."
+
+	aPresenter fileListPresenter selectPathByItems:
+		(aPresenter fileNodeOf: aFile) pathFromRoot
+]
+
+{ #category : 'helpers' }
+MMCCoveragePresenterFilesTest >> selectedFileOf: aPresenter [
+	"File of the leaf selected in the file tree, nil when nothing (or a folder) is selected."
+
+	^ aPresenter fileListPresenter selection selectedItem ifNotNil: [
+		  :node | node file ]
 ]
 
 { #category : 'helpers' }
@@ -210,11 +250,12 @@ MMCCoveragePresenterFilesTest >> testComputeAllFilesKeepsTheCurrentFile [
 	| presenter |
 	self buildStandardFixture.
 	presenter := self newPresenter.
+	self buildFileTreeOf: presenter.
 	presenter showFile: (self file: 'b.txt').
 	presenter computeAllFiles.
 	self assert: presenter currentFile equals: (self file: 'b.txt').
 	self
-		assert: presenter fileListPresenter selection selectedItem
+		assert: (self selectedFileOf: presenter)
 		equals: (self file: 'b.txt')
 ]
 
@@ -227,7 +268,7 @@ MMCCoveragePresenterFilesTest >> testEmptyFilterShowsAllFilesAgain [
 	presenter fileFilterPresenter text: 'b'.
 	presenter fileFilterPresenter text: ''.
 	self assert: presenter visibleFiles size equals: 4.
-	self assert: presenter fileListPresenter items size equals: 4
+	self assert: (self fileItemsOf: presenter) size equals: 4
 ]
 
 { #category : 'tests' }
@@ -251,10 +292,10 @@ MMCCoveragePresenterFilesTest >> testFileListItemsAreTheInventoryFilesInOrder [
 	self buildStandardFixture.
 	presenter := self newPresenter.
 	self
-		assert: presenter fileListPresenter items asArray
+		assert: (self fileItemsOf: presenter) asArray
 		equals: presenter modelFiles files asArray.
 	self
-		assert: (self namesOfFiles: presenter fileListPresenter items)
+		assert: (self namesOfFiles: (self fileItemsOf: presenter))
 		equals: #( 'a.txt' 'b.txt' 'c.txt' 'gone.txt' )
 ]
 
@@ -341,7 +382,7 @@ MMCCoveragePresenterFilesTest >> testFilterKeepsFilesWhoseRelativeNameContainsTh
 		assert: (self namesOfFiles: presenter visibleFiles)
 		equals: #( 'b.txt' ).
 	self
-		assert: (self namesOfFiles: presenter fileListPresenter items)
+		assert: (self namesOfFiles: (self fileItemsOf: presenter))
 		equals: #( 'b.txt' )
 ]
 
@@ -364,7 +405,7 @@ MMCCoveragePresenterFilesTest >> testFilterWithoutMatchEmptiesTheListButKeepsThe
 	presenter := self newPresenter.
 	presenter fileFilterPresenter text: 'zzz'.
 	self assert: presenter visibleFiles isEmpty.
-	self assert: presenter fileListPresenter items isEmpty.
+	self assert: (self fileItemsOf: presenter) isEmpty.
 	self assert: presenter currentFile equals: (self file: 'a.txt')
 ]
 
@@ -455,14 +496,15 @@ MMCCoveragePresenterFilesTest >> testLabelsAreSortedByRelativePathAndShowQuestio
 
 { #category : 'tests' }
 MMCCoveragePresenterFilesTest >> testListDisplaysTheLabels [
-	"The display block of the list is fileLabelFor:."
+	"The column of the file tree displays the label of the leaf: for files at the root of the inventory (no folder), it is fileLabelFor:."
 
-	| presenter |
+	| presenter column |
 	self buildStandardFixture.
 	presenter := self newPresenter.
-	presenter fileListPresenter items do: [ :each |
+	column := presenter fileListPresenter columns first.
+	(self fileItemsOf: presenter) do: [ :each |
 			self
-				assert: (presenter fileListPresenter display value: each)
+				assert: (column evaluation value: (presenter fileNodeOf: each))
 				equals: (presenter fileLabelFor: each) ]
 ]
 
@@ -615,9 +657,10 @@ MMCCoveragePresenterFilesTest >> testOpensOnTheFirstSortedFile [
 	| presenter |
 	self buildStandardFixture.
 	presenter := self newPresenter.
+	self buildFileTreeOf: presenter.
 	self assert: presenter currentFile equals: (self file: 'a.txt').
 	self
-		assert: presenter fileListPresenter selection selectedItem
+		assert: (self selectedFileOf: presenter)
 		equals: (self file: 'a.txt')
 ]
 
@@ -650,7 +693,8 @@ MMCCoveragePresenterFilesTest >> testSelectingAnItemInTheListShowsTheFile [
 	| presenter |
 	self buildStandardFixture.
 	presenter := self newPresenter.
-	presenter fileListPresenter selectItem: (self file: 'c.txt').
+	self buildFileTreeOf: presenter.
+	self selectFileInList: (self file: 'c.txt') of: presenter.
 	self assert: presenter currentFile equals: (self file: 'c.txt').
 	self assert: presenter textPresenter text equals: 'xxx'.
 	self
@@ -693,9 +737,10 @@ MMCCoveragePresenterFilesTest >> testShowFileSelectsTheFileInTheListWithoutBounc
 	| presenter |
 	self buildStandardFixture.
 	presenter := self newPresenter.
+	self buildFileTreeOf: presenter.
 	presenter showFile: (self file: 'b.txt').
 	self
-		assert: presenter fileListPresenter selection selectedItem
+		assert: (self selectedFileOf: presenter)
 		equals: (self file: 'b.txt').
 	self assert: presenter currentFile equals: (self file: 'b.txt').
 	self assert: presenter textPresenter text size equals: 100
@@ -742,7 +787,7 @@ MMCCoveragePresenterFilesTest >> testSingleFileModelHasOneItemAndNoNavigation [
 		from: 1
 		to: 5.
 	presenter := self newPresenter.
-	self assert: presenter fileListPresenter items size equals: 1.
+	self assert: (self fileItemsOf: presenter) size equals: 1.
 	self assert: presenter currentFile equals: (self file: 'only.txt').
 	self deny: presenter previousFileButton isEnabled.
 	self deny: presenter nextFileButton isEnabled.

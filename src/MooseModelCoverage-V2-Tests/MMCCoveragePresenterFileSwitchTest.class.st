@@ -57,6 +57,13 @@ MMCCoveragePresenterFileSwitchTest >> addSplit: aName parts: aCollection [
 ]
 
 { #category : 'helpers' }
+MMCCoveragePresenterFileSwitchTest >> buildFileTreeOf: aPresenter [
+	"Build the widget of the file tree without opening a window: the selection of a SpTreeTablePresenter is only applied once its adapter exists (see selectPathByItems:)."
+
+	aPresenter fileListPresenter build
+]
+
+{ #category : 'helpers' }
 MMCCoveragePresenterFileSwitchTest >> buildFullyCoveredFixture [
 	"p.txt and q.txt, 10 chars each, entirely covered (no uncovered zone)."
 
@@ -169,6 +176,22 @@ MMCCoveragePresenterFileSwitchTest >> newPresenter [
 ]
 
 { #category : 'helpers' }
+MMCCoveragePresenterFileSwitchTest >> selectFileInList: aFile of: aPresenter [
+	"Select the leaf of aFile in the file tree, as a click would do."
+
+	aPresenter fileListPresenter selectPathByItems:
+		(aPresenter fileNodeOf: aFile) pathFromRoot
+]
+
+{ #category : 'helpers' }
+MMCCoveragePresenterFileSwitchTest >> selectedFileOf: aPresenter [
+	"File of the leaf selected in the file tree, nil when nothing (or a folder) is selected."
+
+	^ aPresenter fileListPresenter selection selectedItem ifNotNil: [
+		  :node | node file ]
+]
+
+{ #category : 'helpers' }
 MMCCoveragePresenterFileSwitchTest >> separator [
 	"The middle dot used by the global summary."
 
@@ -205,6 +228,7 @@ MMCCoveragePresenterFileSwitchTest >> testEntityInAnotherFileSwitchesTheFileAndS
 	| presenter |
 	self buildStandardFixture.
 	presenter := self newPresenter.
+	self buildFileTreeOf: presenter.
 	presenter treeSelectionChangedTo: (self entity: 'ClassC').
 	self assert: presenter currentFile equals: (self file: 'c.txt').
 	self assert: presenter textPresenter text equals: 'xxx'.
@@ -212,7 +236,7 @@ MMCCoveragePresenterFileSwitchTest >> testEntityInAnotherFileSwitchesTheFileAndS
 		assert: presenter textPresenter selectionInterval
 		equals: (1 to: 1).
 	self
-		assert: presenter fileListPresenter selection selectedItem
+		assert: (self selectedFileOf: presenter)
 		equals: (self file: 'c.txt')
 ]
 
@@ -433,19 +457,50 @@ MMCCoveragePresenterFileSwitchTest >> testOpenOnOpensTheFirstSortedFileOnARealWi
 ]
 
 { #category : 'tests' }
+MMCCoveragePresenterFileSwitchTest >> testSelectedEntityInTreeAnswersNilWhenTheSelectionPathIsStale [
+	"Non regression: a selection path that no longer exists in the tree (here out of the bounds of the roots) gives nil instead of an error."
+
+	| presenter |
+	self buildStandardFixture.
+	presenter := self newPresenter.
+	presenter treeFilter: #all.
+	presenter treePresenter selectPath: #( 50 60 ).
+	self shouldnt: [ presenter selectedEntityInTree ] raise: Error.
+	self assert: presenter selectedEntityInTree isNil
+]
+
+{ #category : 'tests' }
 MMCCoveragePresenterFileSwitchTest >> testSelectingAFileInTheListDoesNotLoopWithTheTree [
 
 	| presenter |
 	self buildStandardFixture.
 	presenter := self newPresenter.
-	presenter fileListPresenter selectItem: (self file: 'b.txt').
+	self buildFileTreeOf: presenter.
+	self selectFileInList: (self file: 'b.txt') of: presenter.
 	self deny: presenter isSynchronizing.
 	self assert: presenter currentFile equals: (self file: 'b.txt').
-	presenter fileListPresenter selectItem: (self file: 'a.txt').
+	self selectFileInList: (self file: 'a.txt') of: presenter.
 	self assert: presenter currentFile equals: (self file: 'a.txt').
 	self
-		assert: presenter fileListPresenter selection selectedItem
+		assert: (self selectedFileOf: presenter)
 		equals: (self file: 'a.txt')
+]
+
+{ #category : 'tests' }
+MMCCoveragePresenterFileSwitchTest >> testSelectingAnEntityOfAnotherFileWithoutWidgetRaisesNoErrorAndSelectsIt [
+	"Non regression (stale tree selection): without widget, whole model mode, selectEntityInTree: of an entity of another file rebuilds the tree roots during the file switch; the stale path must not raise (SubscriptOutOfBounds), the current file is updated and the entity is selected."
+
+	| presenter |
+	self buildStandardFixture.
+	presenter := self newPresenter.
+	presenter treeFilter: #all.
+	self deny: presenter treePresenter hasAdapter.
+	self
+		shouldnt: [ presenter selectEntityInTree: (self entity: 'ClassC') ]
+		raise: Error.
+	self assert: presenter currentFile equals: (self file: 'c.txt').
+	self assert:
+		presenter selectedEntityInTree == (self entity: 'ClassC')
 ]
 
 { #category : 'tests' }

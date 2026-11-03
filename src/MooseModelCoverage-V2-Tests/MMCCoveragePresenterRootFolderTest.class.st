@@ -108,6 +108,13 @@ MMCCoveragePresenterRootFolderTest >> buildAbsoluteFixture [
 		to: 1
 ]
 
+{ #category : 'helpers' }
+MMCCoveragePresenterRootFolderTest >> buildFileTreeOf: aPresenter [
+	"Build the widget of the file tree without opening a window: the selection of a SpTreeTablePresenter is only applied once its adapter exists (see selectPathByItems:)."
+
+	aPresenter fileListPresenter build
+]
+
 { #category : 'fixture' }
 MMCCoveragePresenterRootFolderTest >> buildRelativeFixture [
 	"Anchors with RELATIVE names, model rootFolder = the wrong empty folder: every file is unreadable. Sources in the right folder: src/a/Alpha.java (100 chars, ClassAlpha 1-50 = 50 %), src/b/Beta.java (10 chars, ClassBeta 1-10 = 100 %). src/b/Delta.java (ClassDelta) exists nowhere. Sorted: Alpha, Beta, Delta."
@@ -152,6 +159,23 @@ MMCCoveragePresenterRootFolderTest >> chooseOn: aPresenter [
 ]
 
 { #category : 'helpers' }
+MMCCoveragePresenterRootFolderTest >> fileItemsOf: aPresenter [
+	"Files of the leaves of the file tree, flattened in the order of the tree (folders first, then alphabetical)."
+
+	| result pending |
+	result := OrderedCollection new.
+	pending := OrderedCollection withAll:
+		           aPresenter fileListPresenter roots.
+	[ pending isEmpty ] whileFalse: [
+			| node |
+			node := pending removeFirst.
+			node isFile
+				ifTrue: [ result add: node file ]
+				ifFalse: [ pending addAllFirst: node children ] ].
+	^ result
+]
+
+{ #category : 'helpers' }
 MMCCoveragePresenterRootFolderTest >> fileNamed: aRelativeName [
 	"Canonical file of the right folder."
 
@@ -169,10 +193,10 @@ MMCCoveragePresenterRootFolderTest >> install: anAnswer on: aPresenter [
 
 { #category : 'helpers' }
 MMCCoveragePresenterRootFolderTest >> labelsOf: aPresenter [
-	"Labels of the items of the file list, in order."
+	"Full labels (see fileLabelFor:) of the files of the file tree, the leaves flattened in the order of the tree."
 
-	^ aPresenter fileListPresenter items collect: [ :each |
-		  aPresenter fileLabelFor: each ]
+	^ ((self fileItemsOf: aPresenter) collect: [ :each |
+		   aPresenter fileLabelFor: each ]) asArray
 ]
 
 { #category : 'helpers' }
@@ -197,6 +221,14 @@ MMCCoveragePresenterRootFolderTest >> newWindowPresenter [
 	presenter := self newPresenter.
 	presenter treeFilter: #all.
 	^ presenter
+]
+
+{ #category : 'helpers' }
+MMCCoveragePresenterRootFolderTest >> selectedFileOf: aPresenter [
+	"File of the leaf selected in the file tree, nil when nothing (or a folder) is selected."
+
+	^ aPresenter fileListPresenter selection selectedItem ifNotNil: [
+		  :node | node file ]
 ]
 
 { #category : 'helpers' }
@@ -497,6 +529,7 @@ MMCCoveragePresenterRootFolderTest >> testCurrentFileIsKeptWhenStillInTheNewInve
 	| presenter |
 	self buildAbsoluteFixture.
 	presenter := self newPresenter.
+	self buildFileTreeOf: presenter.
 	presenter showFile: (self fileNamed: 'b.txt').
 	self setRoot: folder / 'sub' on: presenter.
 	self assert: presenter currentFile equals: (self fileNamed: 'b.txt').
@@ -505,7 +538,7 @@ MMCCoveragePresenterRootFolderTest >> testCurrentFileIsKeptWhenStillInTheNewInve
 		equals:
 		'Coverage - ' , (self fileNamed: 'b.txt') pathString , ' (2/3)'.
 	self
-		assert: presenter fileListPresenter selection selectedItem
+		assert: (self selectedFileOf: presenter)
 		equals: (self fileNamed: 'b.txt').
 	self assert: presenter textPresenter text size equals: 100
 ]
@@ -520,6 +553,38 @@ MMCCoveragePresenterRootFolderTest >> testDefaultChooserIsANonNilBlockNeverEvalu
 	self assert: (presenter perform: #rootFolderChooser) isBlock
 ]
 
+{ #category : 'tests - click and performance' }
+MMCCoveragePresenterRootFolderTest >> testExpandFileTreeChangesNeitherTheFileNorTheCoverage [
+	"Non regression: unfolding the file tree (widget built, no window) keeps the current file and does not recompute the coverage (same plan and same decorator objects), and the leaf of the current file stays selected."
+
+	| presenter file plan decorators |
+	1 to: 30 do: [ :i |
+			self
+				addClass: 'C' , i printString
+				on: 'd' , (i \\ 5) printString , '/f' , i printString , '.txt'
+				from: 1
+				to: 5 ].
+	presenter := self newPresenter.
+	self buildFileTreeOf: presenter.
+	file := presenter currentFile.
+	plan := presenter plan.
+	decorators := presenter decorators.
+	presenter expandFileTree.
+	self assert: presenter currentFile equals: file.
+	self assert: presenter plan == plan.
+	self assert: presenter decorators size equals: decorators size.
+	presenter decorators
+		with: decorators
+		do: [ :after :before | self assert: after == before ].
+	self
+		assert:
+		presenter fileListPresenter adapter widget dataSource numberOfRows
+		equals: 35.
+	self
+		assert: presenter fileListPresenter selection selectedItem
+		equals: (presenter fileNodeOf: file)
+]
+
 { #category : 'tests - setRootFolder' }
 MMCCoveragePresenterRootFolderTest >> testFileFilterIsKept [
 
@@ -529,7 +594,7 @@ MMCCoveragePresenterRootFolderTest >> testFileFilterIsKept [
 	presenter fileFilterPresenter text: 'src/b'.
 	self setRoot: folder on: presenter.
 	self assert: presenter fileFilterPresenter text equals: 'src/b'.
-	self assert: presenter fileListPresenter items size equals: 2.
+	self assert: (self fileItemsOf: presenter) size equals: 2.
 	self
 		assert: (self labelsOf: presenter) first
 		equals:
@@ -583,6 +648,48 @@ MMCCoveragePresenterRootFolderTest >> testOnlyTheCurrentFileIsComputedAfterTheCh
 	self assert: ((self labelsOf: presenter) second endsWith: '  ?').
 	self assert:
 		(presenter globalSummaryText includesSubstring: 'computed 1/3')
+]
+
+{ #category : 'tests - click and performance' }
+MMCCoveragePresenterRootFolderTest >> testOpenOnTwoThousandFilesInARealWindowIsFastAndExpandsTheTree [
+	"Non regression (freeze of about 149 s at the opening): 2000 fictive files in 20 folders, real window. A watchdog process raises an error in the test process after 30 s (the test runner is never blocked longer). The opening must take less than 3 s (wide threshold) and leave the tree unfolded (2000 files and 20 folders) with the leaf of the current file selected. The window is closed in ensure:."
+
+	| presenter window watchdog testProcess milliseconds node |
+	World ifNil: [ self skip: 'no world' ].
+	1 to: 2000 do: [ :i |
+			self
+				addClass: 'C' , i printString
+				on: 'd' , (i \\ 20) printString , '/f' , i printString , '.txt'
+				from: 1
+				to: 5 ].
+	presenter := self newPresenter.
+	testProcess := Processor activeProcess.
+	watchdog := [
+		            (Delay forSeconds: 30) wait.
+		            testProcess signalException:
+			            (Error new messageText:
+				             'open did not return within 30 s (freeze)') ]
+		            forkAt: Processor userInterruptPriority.
+	[
+		milliseconds := Time millisecondsToRun: [ window := presenter open ].
+		watchdog terminate.
+		self
+			assert: milliseconds < 3000
+			description: 'open took ' , milliseconds printString , ' ms'.
+		self
+			assert:
+			presenter fileListPresenter adapter widget dataSource numberOfRows
+			equals: 2020.
+		node := presenter fileNodeOf: presenter currentFile.
+		self assert: node notNil.
+		self
+			assert: presenter fileListPresenter selection selectedItem
+			equals: node ] ensure: [
+			watchdog terminate.
+			window ifNotNil: [
+					[ window close ]
+						on: Error
+						do: [ :e | e return ] ] ]
 ]
 
 { #category : 'tests - window and layout' }
@@ -707,11 +814,12 @@ MMCCoveragePresenterRootFolderTest >> testSetRootFolderRefreshesNavigationButton
 	| presenter |
 	self buildRelativeFixture.
 	presenter := self newPresenter.
+	self buildFileTreeOf: presenter.
 	self setRoot: folder on: presenter.
 	self deny: presenter previousFileButton isEnabled.
 	self assert: presenter nextFileButton isEnabled.
 	self
-		assert: presenter fileListPresenter selection selectedItem
+		assert: (self selectedFileOf: presenter)
 		equals: presenter currentFile
 ]
 
