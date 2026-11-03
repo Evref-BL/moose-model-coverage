@@ -29,6 +29,8 @@ Panel titles: panelTitles answers #('Summary' 'Files' 'Model' 'Source text' 'Unc
 
 Tree context menu, second item ""Open source file in file manager"": sourceFileOf: answers the canonical FileReference of the source file of an entity (with inventory: currentFile when the entity has a file there, else modelFiles fileOf:; without inventory: its file anchor resolved against the rootFolder of the model; nil when absent from the disk, without model or for anything that is not an entity); the item is disabled when it is nil. openSourceFileOfTreeEntity evaluates openFileAction (injectable with openFileAction:) with that file; it does nothing without selection or file. Native opening (default, revealInFileManager:, never run by the tests): macOS LibC runCommand: 'open -R <path>' (the Finder shows the file selected), Windows 'explorer /select,<path>', other platforms openInOSFileBrowser on the parent folder. The command is built by the pure nativeRevealCommandFor:platform: with shellQuoted: (single quotes, apostrophes escaped) or windowsQuoted: (path refused, nothing opened, when it holds a double quote, a percent or a line break).
 Limits of the native opening: not run in the tests (only the command construction is), non ASCII paths depend on how LibC passes the string to the shell, and an entity with several files opens its current file or else its first file.
+
+Set root folder: the button setRootFolderButton (""Set root folder"", with an ellipsis) is at the top right of the line of the Whole model check box (a left to right SpBoxLayout: check box expand: true, button expand: false), in treeColumnLayout. It is enabled only with an inventory; its help is ""Root folder: <path>"" or ""Root folder: (none)"", recomputed at each change. A click does chooseRootFolder: the block rootFolderChooser (injectable with rootFolderChooser:, without argument, answering a FileReference or nil) is evaluated once; nil changes nothing. The default block is the dialog of the Set Root Folder action of the Moose Models Browser (MiSetRootFolderCommand): StOpenDirectoryPresenter modal titled ""Choose the root folder for the sources of <model name>"", nil when cancelled. The tests never evaluate it. setRootFolder: (FileReference, locator or path String of an existing folder; anything else, nil, or no inventory is ignored without error) does model rootFolder: <folder fullName> (a String, as Moose does), builds a new MMCModelFiles on the model, then loadFile: (the part of showFile: that skips the current file test, so that the current file is reloaded) on the current file when it is still in the new inventory, else on the first sorted file. File list, text, uncovered zones, tree (mode and selection kept when the entity stays visible), summaries, window title, navigation buttons and help are refreshed, the file filter is kept, only the current file is computed, no echo (isSynchronizing is false at the end). Performance: setRootFolder: takes less than 2 s on 2000 files (checked by a test). The model is shared: another presenter on the same model must be rebuilt to see the new inventory.
 "
 Class {
 	#name : 'MMCCoveragePresenter',
@@ -65,7 +67,9 @@ Class {
 		'computeAllButton',
 		'filesSummaryPresenter',
 		'isUpdatingFileList',
-		'openFileAction'
+		'openFileAction',
+		'setRootFolderButton',
+		'rootFolderChooser'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -642,9 +646,9 @@ MMCCoveragePresenter >> buildDerivedState [
 	self buildDecorators
 ]
 
-{ #category : 'files' }
+{ #category : 'initialization' }
 MMCCoveragePresenter >> buildFileWidgets [
-	"Create the file selector widgets (filter, list, buttons, global summary). Without inventory they are disabled."
+	"Create the file selector widgets (filter, list, buttons, global summary) and the root folder button. Without inventory they are disabled."
 
 	isUpdatingFileList := false.
 	fileFilterPresenter := self newTextInput.
@@ -672,6 +676,7 @@ MMCCoveragePresenter >> buildFileWidgets [
 		help: 'Compute the coverage of every file';
 		action: [ self computeAllFiles ].
 	filesSummaryPresenter := self newLabel.
+	self buildRootFolderButton.
 	self refreshFileWidgets
 ]
 
@@ -689,6 +694,16 @@ MMCCoveragePresenter >> buildPalette [
 	palette := MMCColorPalette
 		           forTypeNames: fileCoverage typeNames
 		           theme: theme
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> buildRootFolderButton [
+	"Create the Set root folder button (the label ends with an ellipsis: the action opens a dialog)."
+
+	setRootFolderButton := self newButton.
+	setRootFolderButton
+		label: 'Set root folder' , (String with: (Character value: 16r2026));
+		action: [ self chooseRootFolder ]
 ]
 
 { #category : 'initialization' }
@@ -714,6 +729,14 @@ MMCCoveragePresenter >> buildTreePresenter [
 	wholeModelTogglePresenter label: 'Whole model'.
 	treeStatusPresenter := self newLabel.
 	treeStatusText := ''
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> chooseRootFolder [
+	"Ask the user (rootFolderChooser, evaluated once) for the root folder of the model and set it; do nothing when cancelled."
+
+	self rootFolderChooser value ifNotNil: [ :folder |
+		self setRootFolder: folder ]
 ]
 
 { #category : 'updating' }
@@ -821,6 +844,25 @@ MMCCoveragePresenter >> defaultLayout [
 		  yourself
 ]
 
+{ #category : 'root folder' }
+MMCCoveragePresenter >> defaultRootFolderChooser [
+	"The dialog of MiSetRootFolderCommand: choose a directory, nil when cancelled."
+
+	^ [
+		  | dialog |
+		  dialog := StOpenDirectoryPresenter new
+			            title: 'Choose the root folder for the sources of '
+				            ,
+					            (model
+						             ifNil: [ '' ]
+						             ifNotNil: [ :aModel | aModel name asString ]);
+			            openModal;
+			            yourself.
+		  dialog cancelled
+			  ifTrue: [ nil ]
+			  ifFalse: [ dialog selectedEntry ] ]
+]
+
 { #category : 'synchronisation' }
 MMCCoveragePresenter >> deferTreeRealignmentOn: anEntity [
 	"A real click selects the row, our callback rebuilds the tree, and FastTable then reapplies its old row index. Realign the selection when the event is over, as a deferred UI message of the application (next Morphic cycle, no delay)."
@@ -895,6 +937,24 @@ MMCCoveragePresenter >> detectedThemeFor: aBackgroundColor [
 	(color isNil or: [ color alpha = 0 ]) ifTrue: [
 		^ theme ifNil: [ #dark ] ].
 	^ MMCColorPalette themeForBackground: color
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> existingFolderFrom: anObject [
+	"Answer the FileReference of anObject (file reference, locator or path String) when it is an existing directory, else nil."
+
+	| reference |
+	(anObject isString and: [ anObject isEmpty ]) ifTrue: [ ^ nil ].
+	(anObject isString or: [ anObject isKindOf: AbstractFileReference ])
+		ifFalse: [ ^ nil ].
+	reference := [ anObject asFileReference ]
+		             on: Error
+		             do: [ :e | ^ nil ].
+	^ ([ reference isDirectory ]
+		   on: Error
+		   do: [ :e | false ])
+		  ifTrue: [ reference ]
+		  ifFalse: [ nil ]
 ]
 
 { #category : 'accessing' }
@@ -1130,6 +1190,18 @@ MMCCoveragePresenter >> labelForUncoveredRegion: aRegion [
 				           ifFalse: [ each ] ].
 	preview size > 60 ifTrue: [ preview := (preview first: 60) , '…' ].
 	^ lines , ' - ' , aRegion size printString , ' chars - ' , preview
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> loadFile: aFile [
+	"Show the coverage of aFile, a file of the inventory, even when it is the current file (used after a change of the inventory). The tree selection is kept when its entity is still visible."
+
+	| selected |
+	selected := self selectedEntityInTree.
+	currentFile := aFile.
+	self updateFileCoverage: (modelFiles coverageFor: aFile).
+	self synchronizingDo: [ self selectEntityInTree: selected ].
+	self refreshFileWidgets
 ]
 
 { #category : 'accessing' }
@@ -1400,13 +1472,14 @@ MMCCoveragePresenter >> refreshFileList [
 		isUpdatingFileList := false ]
 ]
 
-{ #category : 'files' }
+{ #category : 'file navigation' }
 MMCCoveragePresenter >> refreshFileWidgets [
-	"Bring the file selector (list, summary, buttons) and the window title up to date."
+	"Bring the file selector (list, summary, buttons), the root folder button and the window title up to date."
 
 	self refreshFileList.
 	self refreshFilesSummary.
 	self refreshFileButtons.
+	self refreshRootFolderButton.
 	self refreshWindowTitle
 ]
 
@@ -1423,6 +1496,17 @@ MMCCoveragePresenter >> refreshHighlights [
 	self clearDecorators.
 	self buildDecorators.
 	self applyDecorators
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> refreshRootFolderButton [
+	"Enable the button with an inventory and show the root folder of the model in its help."
+
+	setRootFolderButton enabled: modelFiles notNil.
+	setRootFolderButton help:
+		'Root folder: ' , ((model notNil and: [ model rootFolder notNil ])
+			 ifTrue: [ self rootFolderText ]
+			 ifFalse: [ '(none)' ])
 ]
 
 { #category : 'tree' }
@@ -1454,6 +1538,20 @@ MMCCoveragePresenter >> revealInFileManager: aFileReference [
 		           platform: platformName.
 	command ifNil: [ ^ self ].
 	LibC runCommand: command
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> rootFolderChooser [
+	"Answer the block, without argument, that asks the user for the root folder: it answers a FileReference, or nil when cancelled. The default opens the modal directory dialog, as the Set Root Folder command of the Moose Models Browser."
+
+	^ rootFolderChooser ifNil: [
+		  rootFolderChooser := self defaultRootFolderChooser ]
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> rootFolderChooser: aBlock [
+
+	rootFolderChooser := aBlock
 ]
 
 { #category : 'tree' }
@@ -1545,6 +1643,30 @@ MMCCoveragePresenter >> setMooseModelBeforeInitialization: aMooseModelOrNil [
 	model := aMooseModelOrNil
 ]
 
+{ #category : 'root folder' }
+MMCCoveragePresenter >> setRootFolder: aFolder [
+	"Make aFolder (FileReference or path String of an existing folder) the root folder of the model, as the Set Root Folder action of the Moose Models Browser: model rootFolder: <full name>. Then build a new inventory and show again the current file when it is still in it (else the first file), refreshing every widget. Do nothing for anything else, or without inventory."
+
+	| folder newFiles target |
+	(modelFiles isNil or: [ model isNil ]) ifTrue: [ ^ self ].
+	folder := self existingFolderFrom: aFolder.
+	folder ifNil: [ ^ self ].
+	modelFiles files isEmpty ifTrue: [ ^ self ].
+	model rootFolder: folder fullName.
+	newFiles := MMCModelFiles on: model.
+	target := (newFiles files includes: currentFile)
+		          ifTrue: [ currentFile ]
+		          ifFalse: [ newFiles files first ].
+	modelFiles := newFiles.
+	self loadFile: target
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> setRootFolderButton [
+
+	^ setRootFolderButton
+]
+
 { #category : 'tree' }
 MMCCoveragePresenter >> shellQuoted: aString [
 	"Answer aString as ONE word of a POSIX shell: between single quotes, each single quote written '\''. Nothing inside single quotes is interpreted by the shell (spaces, double quotes, backslash, dollar, back quote, line breaks)."
@@ -1565,20 +1687,15 @@ MMCCoveragePresenter >> showDetailsAt: aPosition [
 	detailsPresenter text: (self detailsTextAt: aPosition)
 ]
 
-{ #category : 'files' }
+{ #category : 'file navigation' }
 MMCCoveragePresenter >> showFile: aFile [
 	"Show the coverage of aFile, a file of the inventory (computed on demand, cached). Do nothing without inventory, for an unknown file or for the current file. The tree selection is kept when its entity is still visible."
 
-	| selected |
 	modelFiles ifNil: [ ^ self ].
 	(aFile notNil and: [ modelFiles files includes: aFile ]) ifFalse: [
 		^ self ].
 	aFile = currentFile ifTrue: [ ^ self ].
-	selected := self selectedEntityInTree.
-	currentFile := aFile.
-	self updateFileCoverage: (modelFiles coverageFor: aFile).
-	self synchronizingDo: [ self selectEntityInTree: selected ].
-	self refreshFileWidgets
+	self loadFile: aFile
 ]
 
 { #category : 'tree' }
@@ -1771,13 +1888,13 @@ MMCCoveragePresenter >> treeColorFor: anEntity [
 		  ifFalse: [ self uncoveredTreeColor ]
 ]
 
-{ #category : 'initialization' }
+{ #category : 'layout' }
 MMCCoveragePresenter >> treeColumnLayout [
-	"Left column: the file selector (filter, titled list, buttons, global summary) above the check box, the status and the titled tree."
+	"Left column: the file selector (filter, titled list, buttons, global summary) above the line of the check box (left) and of the Set root folder button (right), the status and the titled tree."
 
 	^ SpBoxLayout newTopToBottom
 		  add: self fileSelectorLayout expand: false;
-		  add: wholeModelTogglePresenter expand: false;
+		  add: self wholeModelLineLayout expand: false;
 		  add: treeStatusPresenter expand: false;
 		  add: (self titled: 'Model' around: treePresenter);
 		  yourself
@@ -1979,6 +2096,16 @@ MMCCoveragePresenter >> warningTextFor: anEntity [
 		  ifTrue: [ nil ]
 		  ifFalse: [
 		  'No source anchor: this entity cannot be shown in the text' ]
+]
+
+{ #category : 'layout' }
+MMCCoveragePresenter >> wholeModelLineLayout [
+	"The Whole model check box (left, takes the room) and the Set root folder button (right)."
+
+	^ SpBoxLayout newLeftToRight
+		  add: wholeModelTogglePresenter expand: true;
+		  add: setRootFolderButton expand: false;
+		  yourself
 ]
 
 { #category : 'accessing' }
