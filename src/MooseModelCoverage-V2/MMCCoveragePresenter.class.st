@@ -797,11 +797,11 @@ MMCCoveragePresenter >> computeAllButton [
 
 { #category : 'files' }
 MMCCoveragePresenter >> computeAllFiles [
-	"Compute the coverage of every file of the inventory (those already computed are kept) and refresh the labels and the global summary. The current file does not change."
+	"Compute the coverage of every file of the inventory (those already computed are kept) and refresh the labels and the global summary. The current file does not change, nor the scroll position of the file tree."
 
 	modelFiles ifNil: [ ^ self ].
 	modelFiles computeAll.
-	self refreshFileWidgets
+	self refreshFileLabels
 ]
 
 { #category : 'initialization' }
@@ -1352,7 +1352,14 @@ MMCCoveragePresenter >> labelForUncoveredRegion: aRegion [
 
 { #category : 'root folder' }
 MMCCoveragePresenter >> loadFile: aFile [
-	"Show the coverage of aFile, a file of the inventory, even when it is the current file (used after a change of the inventory). The tree selection is kept when its entity is still visible, and so is its emphasis."
+	"Show the coverage of aFile, a file of the inventory, even when it is the current file (used after a change of the inventory, so the file tree is rebuilt). The tree selection is kept when its entity is still visible, and so is its emphasis."
+
+	self loadFile: aFile keepingFileTree: false
+]
+
+{ #category : 'root folder' }
+MMCCoveragePresenter >> loadFile: aFile keepingFileTree: aBoolean [
+	"Show the coverage of aFile. The tree selection is kept when its entity is still visible, and so is its emphasis. With aBoolean true and aFile in the file tree, the tree is not rebuilt (only the labels are refreshed, see #refreshFileLabels) so that its scroll position is kept; otherwise it is rebuilt."
 
 	| selected |
 	selected := self selectedEntityInTree.
@@ -1360,7 +1367,9 @@ MMCCoveragePresenter >> loadFile: aFile [
 	self updateFileCoverage: (modelFiles coverageFor: aFile).
 	self synchronizingDo: [ self selectEntityInTree: selected ].
 	self refreshEmphasis.
-	self refreshFileWidgets
+	(aBoolean and: [ (self fileNodeOf: aFile) notNil ])
+		ifTrue: [ self refreshFileLabels ]
+		ifFalse: [ self refreshFileWidgets ]
 ]
 
 { #category : 'accessing' }
@@ -1651,6 +1660,25 @@ MMCCoveragePresenter >> refreshFileButtons [
 		(hasFiles and: [ index < modelFiles fileCount ])
 ]
 
+{ #category : 'file navigation' }
+MMCCoveragePresenter >> refreshFileLabels [
+	"Bring the file selector up to date after a change that leaves the structure of the tree as it is (a coverage computed): the labels are evaluated again and the selection follows the current file, but the roots are not rebuilt, so the scroll position of the tree is kept. When the selection has to move (navigation), the tree is scrolled only if the current file is not fully visible."
+
+	| node |
+	fileListPresenter hasAdapter ifTrue: [
+		fileListPresenter adapter widget refresh ].
+	node := self fileNodeOf: currentFile.
+	(node notNil and: [ fileListPresenter selection selectedItem ~~ node ])
+		ifTrue: [
+				self realignFileTreeSelection.
+				fileListPresenter hasAdapter ifTrue: [
+					fileListPresenter adapter widget ensureVisibleFirstSelection ] ].
+	self refreshFilesSummary.
+	self refreshFileButtons.
+	self refreshRootFolderButton.
+	self refreshWindowTitle
+]
+
 { #category : 'file list' }
 MMCCoveragePresenter >> refreshFileList [
 	"Rebuild the file tree from the visible files (folders unfolded and compacted, leaves labelled with their coverage) and select the current file when it is visible, without reacting to the selection."
@@ -1889,13 +1917,13 @@ MMCCoveragePresenter >> showDetailsAt: aPosition [
 
 { #category : 'file navigation' }
 MMCCoveragePresenter >> showFile: aFile [
-	"Show the coverage of aFile, a file of the inventory (computed on demand, cached). Do nothing without inventory, for an unknown file or for the current file. The tree selection is kept when its entity is still visible."
+	"Show the coverage of aFile, a file of the inventory (computed on demand, cached). Do nothing without inventory, for an unknown file or for the current file. The tree selection is kept when its entity is still visible. The file tree is not rebuilt, so it keeps its scroll position."
 
 	modelFiles ifNil: [ ^ self ].
 	(aFile notNil and: [ modelFiles files includes: aFile ]) ifFalse: [
 		^ self ].
 	aFile = currentFile ifTrue: [ ^ self ].
-	self loadFile: aFile
+	self loadFile: aFile keepingFileTree: true
 ]
 
 { #category : 'tree' }
