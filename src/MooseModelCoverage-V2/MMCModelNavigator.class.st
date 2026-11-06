@@ -325,18 +325,11 @@ MMCModelNavigator >> markVisible: anEntity [
 					           ifAbsentPut: [ self firstContainerOf: current ] ]
 ]
 
-{ #category : 'private' }
+{ #category : 'labels' }
 MMCModelNavigator >> metamodelPrefixOf: aClass [
-	"Copy of MMCEntityRegion>>metamodelPrefixOf: (private there): the topmost Famix<Metamodel>Entity class of the superclass chain gives Famix<Metamodel>, else Famix."
+	"The topmost Famix<Metamodel>Entity class of the superclass chain gives Famix<Metamodel>, else Famix."
 
-	| rootEntity |
-	rootEntity := aClass withAllSuperclasses reversed
-		              detect: [ :each |
-				              (each name beginsWith: 'Famix') and: [
-					              (each name endsWith: 'Entity') and: [
-						              each name size > 11 ] ] ]
-		              ifNone: [ ^ 'Famix' ].
-	^ rootEntity name allButLast: 6
+	^ MMCTypeName metamodelPrefixOf: aClass
 ]
 
 { #category : 'accessing' }
@@ -441,15 +434,9 @@ MMCModelNavigator >> startKeyOf: anEntity [
 
 { #category : 'labels' }
 MMCModelNavigator >> typeNameOf: anEntity [
-	"Same logic as MMCEntityRegion>>typeName (not reusable without a region): class name without the Famix and metamodel prefixes."
+	"Class name without the Famix and metamodel prefixes. See MMCTypeName."
 
-	| name prefix |
-	name := anEntity class name.
-	prefix := self metamodelPrefixOf: anEntity class.
-	(name beginsWith: prefix) ifTrue: [ ^ name allButFirst: prefix size ].
-	^ (name beginsWith: 'Famix')
-		  ifTrue: [ name allButFirst: 5 ]
-		  ifFalse: [ name ]
+	^ MMCTypeName ofClass: anEntity class
 ]
 
 { #category : 'accessing' }

@@ -71,7 +71,14 @@ Class {
 		'setRootFolderButton',
 		'rootFolderChooser',
 		'emphasizedEntity',
-		'fileNodes'
+		'fileNodes',
+		'colorScheme',
+		'isColorSchemeExplicit',
+		'isApplyingColorScheme',
+		'colorSchemeSubscription',
+		'colorsButton',
+		'colorSettingsOpener',
+		'colorSettingsWindow'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -620,6 +627,19 @@ MMCCoveragePresenter >> anchorFileOf: anEntity [
 		  do: [ :e | e return: nil ]
 ]
 
+{ #category : 'color scheme' }
+MMCCoveragePresenter >> applyColorScheme: aColorScheme [
+	"Rebuild the palette with the current scheme and refresh the highlights. Safe without widgets (nothing to refresh), for a scheme which is not the current one, and when called again while applying."
+
+	(isApplyingColorScheme == true or: [ aColorScheme ~~ colorScheme ])
+		ifTrue: [ ^ self ].
+	(fileCoverage isNil or: [ textPresenter isNil ]) ifTrue: [ ^ self ].
+	isApplyingColorScheme := true.
+	[
+		self buildPalette.
+		self refreshHighlights ] ensure: [ isApplyingColorScheme := false ]
+]
+
 { #category : 'updating' }
 MMCCoveragePresenter >> applyDecorators [
 	"Put the decorators on the text widget. Without a widget nothing is done: they are put when the widget is built (a deferred action would pile up on each refresh)."
@@ -639,6 +659,17 @@ MMCCoveragePresenter >> applyTheme: aSymbol [
 	theme := aSymbol.
 	self buildPalette.
 	self refreshHighlights
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> buildColorsButton [
+	"Create the Colors button (the label ends with an ellipsis: the action opens a window)."
+
+	colorsButton := self newButton.
+	colorsButton
+		label: 'Colors' , (String with: (Character value: 16r2026));
+		help: 'Choose the color of each Famix type that has source anchors';
+		action: [ self openColorSettings ]
 ]
 
 { #category : 'updating' }
@@ -711,6 +742,7 @@ MMCCoveragePresenter >> buildFileWidgets [
 		action: [ self computeAllFiles ].
 	filesSummaryPresenter := self newLabel.
 	self buildRootFolderButton.
+	self buildColorsButton.
 	self refreshFileWidgets
 ]
 
@@ -724,10 +756,13 @@ MMCCoveragePresenter >> buildNavigator [
 
 { #category : 'updating' }
 MMCCoveragePresenter >> buildPalette [
+	"Build the palette on the types of the whole model (stable colors from a file to another) when an inventory exists, united with those of the current file for safety; else on the types of the current file. The color scheme is injected."
 
-	palette := MMCColorPalette
-		           forTypeNames: fileCoverage typeNames
-		           theme: theme
+	| names |
+	names := fileCoverage typeNames.
+	modelFiles ifNotNil: [ names := modelFiles typeNames , names ].
+	palette := MMCColorPalette forTypeNames: names theme: theme.
+	palette colorScheme: self colorScheme
 ]
 
 { #category : 'root folder' }
@@ -780,6 +815,64 @@ MMCCoveragePresenter >> clearDecorators [
 	textPresenter hasAdapter ifTrue: [
 		textPresenter removeAllTextSegmentDecorations ].
 	decorators := OrderedCollection new
+]
+
+{ #category : 'color scheme' }
+MMCCoveragePresenter >> colorScheme [
+	"Answer the color scheme used by the palette: the one given with colorScheme:, else the scheme of the Moose model in MMCColorSchemeRegistry, else (without model) an empty scheme of the presenter. Created and subscribed on first use."
+
+	colorScheme ifNil: [
+			colorScheme := model
+				               ifNil: [ MMCColorScheme new ]
+				               ifNotNil: [ MMCColorSchemeRegistry for: model ].
+			self subscribeToColorScheme ].
+	^ colorScheme
+]
+
+{ #category : 'color scheme' }
+MMCCoveragePresenter >> colorScheme: aColorScheme [
+	"Use aColorScheme (nil to go back to the default scheme of the model), rebuild the palette and refresh the highlights when the widgets exist."
+
+	self unsubscribeFromColorScheme.
+	colorScheme := aColorScheme.
+	isColorSchemeExplicit := aColorScheme notNil.
+	colorScheme ifNotNil: [ self subscribeToColorScheme ].
+	(fileCoverage notNil and: [ palette notNil ]) ifTrue: [
+		self applyColorScheme: self colorScheme ]
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> colorSettingsClosed: aWindow [
+	"Forget the color settings window, which has just been closed (ignore a window that is not the current one)."
+
+	colorSettingsWindow == aWindow ifTrue: [ colorSettingsWindow := nil ]
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> colorSettingsOpener [
+	"Answer the block, with the presenter as argument, that opens the color settings window and answers its SpWindowPresenter (or nil). The default opens an MMCColorSettingsPresenter, non modal. Replaced in tests: never open a real window from them."
+
+	^ colorSettingsOpener ifNil: [
+		  colorSettingsOpener := self defaultColorSettingsOpener ]
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> colorSettingsOpener: aBlock [
+
+	colorSettingsOpener := aBlock
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> colorSettingsWindow [
+	"Answer the open color settings window, nil when there is none."
+
+	^ colorSettingsWindow
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> colorsButton [
+
+	^ colorsButton
 ]
 
 { #category : 'file list' }
@@ -870,6 +963,12 @@ MMCCoveragePresenter >> decorators [
 	"Answer a copy of the text decorators of the plan segments (one per segment, in order)."
 
 	^ decorators copy
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> defaultColorSettingsOpener [
+
+	^ [ :aPresenter | MMCColorSettingsPresenter openOn: aPresenter ]
 ]
 
 { #category : 'initialization' }
@@ -1282,7 +1381,9 @@ MMCCoveragePresenter >> initializePresenters [
 MMCCoveragePresenter >> initializeWindow: aWindowPresenter [
 
 	super initializeWindow: aWindowPresenter.
-	aWindowPresenter initialExtent: self initialExtent
+	aWindowPresenter initialExtent: self initialExtent.
+	colorScheme ifNotNil: [ self subscribeToColorScheme ].
+	aWindowPresenter whenClosedDo: [ self unsubscribeFromColorScheme ]
 ]
 
 { #category : 'tree' }
@@ -1386,6 +1487,13 @@ MMCCoveragePresenter >> modelFiles [
 	^ modelFiles
 ]
 
+{ #category : 'colors' }
+MMCCoveragePresenter >> modelName [
+	"Answer the name of the Moose model, nil without model."
+
+	^ model ifNotNil: [ :aModel | aModel name asString ]
+]
+
 { #category : 'text menu' }
 MMCCoveragePresenter >> mouseTextPosition [
 	"Answer the text position under the mouse (nil when none, see textPositionAtGlobalPoint:). Rubric builds the context menu on the mouse down of the right click, so the hand is still on the clicked point."
@@ -1484,6 +1592,20 @@ MMCCoveragePresenter >> nextUncoveredFileCandidate [
 				 (modelFiles coverageFor: file) uncoveredRegions isNotEmpty ])
 				ifTrue: [ ^ file ] ].
 	^ nil
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> openColorSettings [
+	"Open the color settings window (colorSettingsOpener), once: when it is already open, bring it to the front instead of opening a second one."
+
+	| opened |
+	(colorSettingsWindow notNil and: [ colorSettingsWindow isOpen ])
+		ifTrue: [ ^ self raiseColorSettingsWindow ].
+	colorSettingsWindow := nil.
+	opened := self colorSettingsOpener value: self.
+	(opened isKindOf: SpWindowPresenter) ifTrue: [
+		colorSettingsWindow := opened ].
+	^ opened
 ]
 
 { #category : 'tree' }
@@ -1610,6 +1732,17 @@ MMCCoveragePresenter >> putUncoveredDetailsAt: aPosition on: aStream [
 					print: zone interval last ]
 ]
 
+{ #category : 'colors' }
+MMCCoveragePresenter >> raiseColorSettingsWindow [
+	"Bring the open color settings window to the front."
+
+	| widget |
+	widget := colorSettingsWindow hasAdapter ifTrue: [
+		          colorSettingsWindow adapter widget ].
+	(widget respondsTo: #comeToFront) ifTrue: [ widget comeToFront ].
+	^ colorSettingsWindow
+]
+
 { #category : 'synchronisation' }
 MMCCoveragePresenter >> realignFileTreeSelection [
 	"Select the leaf of the current file again in the file tree and align the FastTable row on it, without echo."
@@ -1633,6 +1766,17 @@ MMCCoveragePresenter >> realignTreeSelectionOn: anEntity [
 			self selectPathOf: anEntity.
 			self alignTreeWidgetOn: anEntity ].
 	self refreshEmphasis
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> refreshColorsButton [
+	"Enable the button with an inventory (the types come from it) and explain it in its help."
+
+	colorsButton enabled: modelFiles notNil.
+	colorsButton help: (modelFiles notNil
+			 ifTrue: [
+			 'Choose the color of each Famix type that has source anchors' ]
+			 ifFalse: [ 'No inventory of source files: no Famix type to color' ])
 ]
 
 { #category : 'updating' }
@@ -1676,6 +1820,7 @@ MMCCoveragePresenter >> refreshFileLabels [
 	self refreshFilesSummary.
 	self refreshFileButtons.
 	self refreshRootFolderButton.
+	self refreshColorsButton.
 	self refreshWindowTitle
 ]
 
@@ -1706,6 +1851,7 @@ MMCCoveragePresenter >> refreshFileWidgets [
 	self refreshFilesSummary.
 	self refreshFileButtons.
 	self refreshRootFolderButton.
+	self refreshColorsButton.
 	self refreshWindowTitle
 ]
 
@@ -1751,6 +1897,15 @@ MMCCoveragePresenter >> refreshWindowTitle [
 	self window ifNotNil: [ :aWindow | aWindow title: self windowTitle ]
 ]
 
+{ #category : 'color scheme' }
+MMCCoveragePresenter >> releaseDefaultColorScheme [
+	"Forget the scheme of the model, taken again on next use, unless a scheme was given with colorScheme:."
+
+	isColorSchemeExplicit == true ifTrue: [ ^ self ].
+	self unsubscribeFromColorScheme.
+	colorScheme := nil
+]
+
 { #category : 'tree' }
 MMCCoveragePresenter >> revealInFileManager: aFileReference [
 	"Real native opening (never run by the tests): macOS and Windows run nativeRevealCommandFor:platform: with LibC runCommand: (the file is selected in the Finder or Explorer), other platforms open the PARENT folder with openInOSFileBrowser (opening the file itself would start its application). Nothing is done when the command cannot be built safely."
@@ -1764,6 +1919,16 @@ MMCCoveragePresenter >> revealInFileManager: aFileReference [
 		           platform: platformName.
 	command ifNil: [ ^ self ].
 	LibC runCommand: command
+]
+
+{ #category : 'colors' }
+MMCCoveragePresenter >> rootAndColorButtonsLayout [
+	"The Set root folder button above the Colors button, in one column (not wider than the root folder button)."
+
+	^ SpBoxLayout newTopToBottom
+		  add: setRootFolderButton expand: false;
+		  add: colorsButton expand: false;
+		  yourself
 ]
 
 { #category : 'root folder' }
@@ -1945,6 +2110,21 @@ MMCCoveragePresenter >> sourceFileOf: anEntity [
 	^ (file notNil and: [ file isFile ])
 		  ifTrue: [ file ]
 		  ifFalse: [ nil ]
+]
+
+{ #category : 'color scheme' }
+MMCCoveragePresenter >> subscribeToColorScheme [
+	"Refresh when the current scheme changes. The block only holds the presenter weakly, so a scheme kept by the registry does not retain presenters that were never closed."
+
+	| reference scheme |
+	self unsubscribeFromColorScheme.
+	scheme := colorScheme.
+	scheme ifNil: [ ^ self ].
+	reference := WeakArray with: self.
+	colorSchemeSubscription := [
+		                           reference first ifNotNil: [ :presenter |
+			                           presenter applyColorScheme: scheme ] ].
+	scheme whenChangedDo: colorSchemeSubscription
 ]
 
 { #category : 'cursor' }
@@ -2310,6 +2490,14 @@ MMCCoveragePresenter >> unreadableSummaryText [
 		  ifNotNil: [ base , ' (rootFolder: ' , self rootFolderText , ')' ]
 ]
 
+{ #category : 'color scheme' }
+MMCCoveragePresenter >> unsubscribeFromColorScheme [
+
+	(colorScheme notNil and: [ colorSchemeSubscription notNil ]) ifTrue: [
+		colorScheme removeSubscriber: colorSchemeSubscription ].
+	colorSchemeSubscription := nil
+]
+
 { #category : 'updating' }
 MMCCoveragePresenter >> updateFileCoverage: aCoverage [
 	"Replace the coverage and everything derived from it (plan, palette, text, uncovered zones, summary, details, decorations, navigator and tree roots). The theme, the Moose model and the tree filter are kept. Order matters: decorations are removed before the text changes, and put back last."
@@ -2328,8 +2516,9 @@ MMCCoveragePresenter >> updateFileCoverage: aCoverage [
 
 { #category : 'updating' }
 MMCCoveragePresenter >> updateFileCoverage: aCoverage model: aMooseModelOrNil [
-	"Replace the Moose model and the coverage; the theme and the tree filter are kept."
+	"Replace the Moose model and the coverage; the theme and the tree filter are kept, and so is an explicit color scheme (else the scheme of the new model is used)."
 
+	model ~~ aMooseModelOrNil ifTrue: [ self releaseDefaultColorScheme ].
 	model := aMooseModelOrNil.
 	self updateFileCoverage: aCoverage
 ]
@@ -2392,13 +2581,13 @@ MMCCoveragePresenter >> warningTextFor: anEntity [
 		  'No source anchor: this entity cannot be shown in the text' ]
 ]
 
-{ #category : 'layout' }
+{ #category : 'colors' }
 MMCCoveragePresenter >> wholeModelLineLayout [
-	"The Whole model check box (left, takes the room) and the Set root folder button (right)."
+	"The Whole model check box (left, takes the room) and, at its right, the Set root folder button above the Colors button."
 
 	^ SpBoxLayout newLeftToRight
 		  add: wholeModelTogglePresenter expand: true;
-		  add: setRootFolderButton expand: false;
+		  add: self rootAndColorButtonsLayout expand: false;
 		  yourself
 ]
 

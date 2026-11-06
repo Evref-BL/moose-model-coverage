@@ -14,7 +14,9 @@ Class {
 		'coverages',
 		'entriesByFile',
 		'nonFileEntries',
-		'fileAnchorCount'
+		'fileAnchorCount',
+		'typeCounts',
+		'classesByTypeName'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -54,6 +56,14 @@ MMCModelFiles >> buildInventory [
 			         <= (self relativeNameOf: b) asLowercase ]
 ]
 
+{ #category : 'accessing' }
+MMCModelFiles >> classNamesOfType: aTypeName [
+	"Answer the sorted names of the entity classes grouped under aTypeName (several metamodels can share a type name), empty when unknown."
+
+	self typeCounts.
+	^ classesByTypeName at: aTypeName ifAbsent: [ #(  ) ]
+]
+
 { #category : 'coverage' }
 MMCModelFiles >> computeAll [
 	"Compute the coverage of every file, readable or not."
@@ -67,6 +77,40 @@ MMCModelFiles >> computeRootSegments [
 	rootSegments := model rootFolder ifNotNil: [ :root |
 		                root asFileReference canonicalize path segments
 			                asArray ]
+]
+
+{ #category : 'private' }
+MMCModelFiles >> computeTypeCounts [
+	"Fill typeCounts and classesByTypeName from the inventory. The files of filesByEntity are the very objects of files, so an identity set is enough (and much cheaper than hashing paths)."
+
+	| readable countsByClass counts names |
+	readable := IdentitySet new.
+	files do: [ :each |
+		(self isReadable: each) ifTrue: [ readable add: each ] ].
+	countsByClass := IdentityDictionary new.
+	filesByEntity keysAndValuesDo: [ :entity :entityFiles |
+			(entityFiles anySatisfy: [ :each | readable includes: each ])
+				ifTrue: [
+						countsByClass
+							at: entity class
+							put: (countsByClass at: entity class ifAbsent: [ 0 ]) + 1 ] ].
+	counts := Dictionary new.
+	names := Dictionary new.
+	countsByClass keysAndValuesDo: [ :aClass :count |
+			| typeName |
+			typeName := MMCTypeName ofClass: aClass.
+			counts
+				at: typeName
+				put: (counts at: typeName ifAbsent: [ 0 ]) + count.
+			(names at: typeName ifAbsentPut: [ OrderedCollection new ]) add:
+				aClass name ].
+	classesByTypeName := Dictionary new.
+	names keysAndValuesDo: [ :typeName :classNames |
+		classesByTypeName at: typeName put: classNames asArray sorted ].
+	typeCounts := OrderedDictionary new.
+	counts keys sorted do: [ :typeName |
+		typeCounts at: typeName put: (counts at: typeName) ].
+	^ typeCounts
 ]
 
 { #category : 'private' }
@@ -202,6 +246,8 @@ MMCModelFiles >> setModel: aModel [
 	filesByEntity := IdentityDictionary new.
 	ignoredAnchorCount := 0.
 	fileAnchorCount := 0.
+	typeCounts := nil.
+	classesByTypeName := nil.
 	self computeRootSegments.
 	self buildInventory
 ]
@@ -211,6 +257,20 @@ MMCModelFiles >> summaryFor: aFile [
 	"Answer the cached coverage of aFile, nil while not computed."
 
 	^ coverages at: aFile ifAbsent: [ nil ]
+]
+
+{ #category : 'accessing' }
+MMCModelFiles >> typeCounts [
+	"Answer an OrderedDictionary typeName -> number of unique entities having an anchor on a readable file of the inventory, sorted by type name. Computed once from the inventory (no scan of the model): entities are counted by class, then the classes are grouped by type name. Do not modify the answer."
+
+	^ typeCounts ifNil: [ self computeTypeCounts ]
+]
+
+{ #category : 'accessing' }
+MMCModelFiles >> typeNames [
+	"Answer the sorted type names of the entities having an anchor on a readable file of the inventory."
+
+	^ self typeCounts keys asArray
 ]
 
 { #category : 'accessing' }

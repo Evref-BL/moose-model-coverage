@@ -8,7 +8,8 @@ Class {
 		'theme',
 		'typeNames',
 		'colorCache',
-		'classColors'
+		'classColors',
+		'colorScheme'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -49,7 +50,104 @@ MMCColorPalette >> colorForSegment: aSegment [
 
 { #category : 'accessing' }
 MMCColorPalette >> colorForType: aTypeName depth: anInteger [
-	"Answer the opaque color of the type at the depth (capped between 0 and 3); a neutral grey when the type is unknown. Colors are computed once per palette (key: resolved type index and capped depth) and shared between calls."
+	"Answer the opaque color of the type at the depth (capped between 0 and 3). When the color scheme has a base color for the type, the color is derived from it; else it is the default color: a neutral grey for an unknown type. Colors are computed once per palette (default: resolved type index and capped depth; override: base color and capped depth) and shared between calls."
+
+	| level index base |
+	level := ((anInteger ifNil: [ 0 ]) max: 0) min: 3.
+	base := (colorScheme notNil and: [ aTypeName notNil ]) ifTrue: [
+		        colorScheme overrideFor: aTypeName ].
+	base ifNotNil: [
+			^ (colorCache ifNil: [ colorCache := Dictionary new ])
+				  at: {
+						  base.
+						  level }
+				  ifAbsentPut: [ self colorOfBase: base level: level ] ].
+	index := aTypeName
+		         ifNil: [ 0 ]
+		         ifNotNil: [ typeNames indexOf: aTypeName ].
+	^ (colorCache ifNil: [ colorCache := Dictionary new ])
+		  at: index * 4 + level
+		  ifAbsentPut: [ self defaultColorOfIndex: index level: level ]
+]
+
+{ #category : 'private' }
+MMCColorPalette >> colorOfBase: aBaseColor level: aLevel [
+	"Answer the opaque color of the level (0 to 3) derived from aBaseColor: same hue and saturation, luminance adjusted to the target of the level for the theme (so the text color keeps its contrast). When the target luminance is out of reach with the saturation of the base (a saturated blue in light theme), the saturation is lowered at full value. A grey base gives greys."
+
+	| hue saturation target |
+	hue := aBaseColor hue.
+	saturation := aBaseColor saturation.
+	target := self targetLuminanceAtLevel: aLevel.
+	(self relativeLuminanceOf: (Color h: hue s: saturation v: 1))
+	>= target ifTrue: [
+		^ self colorOfHue: hue saturation: saturation level: aLevel ].
+	^ self colorOfHue: hue lightenedSaturation: saturation target: target
+]
+
+{ #category : 'private' }
+MMCColorPalette >> colorOfHue: aHue level: aLevel [
+	"Saturation is fixed per theme; the value is searched so that the relative luminance hits a target per level. Dark: L in [0.07, 0.165] (>= 1.5 contrast against 2B2B2B, >= 4.5 with white text). Light: L in [0.31, 0.74] (>= 1.15 against F5F5F5, >= 4.5 with black text)."
+
+	^ self
+		  colorOfHue: aHue
+		  saturation: (self defaultSaturationAtLevel: aLevel)
+		  level: aLevel
+]
+
+{ #category : 'private' }
+MMCColorPalette >> colorOfHue: aHue lightenedSaturation: aSaturation target: aTarget [
+	"Answer the color of full value and of the highest saturation (at most aSaturation) whose relative luminance reaches aTarget."
+
+	| low high |
+	low := 0.
+	high := aSaturation.
+	40 timesRepeat: [
+			| middle |
+			middle := low + high / 2.
+			(self relativeLuminanceOf: (Color h: aHue s: middle v: 1))
+			>= aTarget
+				ifTrue: [ low := middle ]
+				ifFalse: [ high := middle ] ].
+	^ Color h: aHue s: low v: 1
+]
+
+{ #category : 'private' }
+MMCColorPalette >> colorOfHue: aHue saturation: aSaturation level: aLevel [
+	"Answer the color of the hue and saturation whose value is searched (bisection) so that the relative luminance hits the target of the level."
+
+	| target low high |
+	target := self targetLuminanceAtLevel: aLevel.
+	low := 0.
+	high := 1.
+	40 timesRepeat: [
+			| middle |
+			middle := low + high / 2.
+			(self relativeLuminanceOf: (Color h: aHue s: aSaturation v: middle))
+			< target
+				ifTrue: [ low := middle ]
+				ifFalse: [ high := middle ] ].
+	^ Color h: aHue s: aSaturation v: high
+]
+
+{ #category : 'accessing' }
+MMCColorPalette >> colorScheme [
+	"Answer the color scheme consulted first, nil by default."
+
+	^ colorScheme
+]
+
+{ #category : 'accessing' }
+MMCColorPalette >> colorScheme: aColorScheme [
+	"Use aColorScheme (nil for none) and forget the colors already computed."
+
+	colorScheme := aColorScheme.
+	colorCache := Dictionary new.
+	classColors := IdentityDictionary new
+]
+
+{ #category : 'accessing' }
+MMCColorPalette >> defaultColorForType: aTypeName depth: anInteger [
+	"Answer the default color of the type at the depth (capped between 0 and 3), ignoring the color scheme: the color shown for a type without override."
 
 	| level index |
 	level := ((anInteger ifNil: [ 0 ]) max: 0) min: 3.
@@ -58,35 +156,26 @@ MMCColorPalette >> colorForType: aTypeName depth: anInteger [
 		         ifNotNil: [ typeNames indexOf: aTypeName ].
 	^ (colorCache ifNil: [ colorCache := Dictionary new ])
 		  at: index * 4 + level
-		  ifAbsentPut: [
-				  index = 0
-					  ifTrue: [ self greyAtLevel: level ]
-					  ifFalse: [
-					  self colorOfHue: (self hueOfIndex: index) level: level ] ]
+		  ifAbsentPut: [ self defaultColorOfIndex: index level: level ]
 ]
 
 { #category : 'private' }
-MMCColorPalette >> colorOfHue: aHue level: aLevel [
-	"Saturation is fixed per theme; the value is searched so that the relative luminance hits a target per level. Dark: L in [0.07, 0.165] (>= 1.5 contrast against 2B2B2B, >= 4.5 with white text). Light: L in [0.38, 0.74] (>= 1.15 against F5F5F5, >= 4.5 with black text)."
+MMCColorPalette >> defaultColorOfIndex: anIndex level: aLevel [
+	"Answer the default color of the type at anIndex in typeNames (0: unknown type, grey)."
 
-	| saturation target low high |
-	theme == #light
-		ifTrue: [
-				saturation := 0.2 + (0.12 * aLevel).
-				target := #( 0.74 0.58 0.43 0.31 ) at: aLevel + 1 ]
-		ifFalse: [
-				saturation := 0.6.
-				target := #( 0.07 0.095 0.125 0.165 ) at: aLevel + 1 ].
-	low := 0.
-	high := 1.
-	40 timesRepeat: [
-			| middle |
-			middle := low + high / 2.
-			(self relativeLuminanceOf: (Color h: aHue s: saturation v: middle))
-			< target
-				ifTrue: [ low := middle ]
-				ifFalse: [ high := middle ] ].
-	^ Color h: aHue s: saturation v: high
+	^ anIndex = 0
+		  ifTrue: [ self greyAtLevel: aLevel ]
+		  ifFalse: [
+		  self colorOfHue: (self hueOfIndex: anIndex) level: aLevel ]
+]
+
+{ #category : 'private' }
+MMCColorPalette >> defaultSaturationAtLevel: aLevel [
+	"Saturation of the default colors: fixed in dark, growing with the level in light."
+
+	^ theme == #light
+		  ifTrue: [ 0.2 + (0.12 * aLevel) ]
+		  ifFalse: [ 0.6 ]
 ]
 
 { #category : 'private' }
@@ -132,6 +221,15 @@ MMCColorPalette >> setTypeNames: aCollection theme: aSymbol [
 		             asSortedCollection asArray.
 	colorCache := Dictionary new.
 	classColors := IdentityDictionary new
+]
+
+{ #category : 'private' }
+MMCColorPalette >> targetLuminanceAtLevel: aLevel [
+	"Relative luminance aimed at by the level (0 to 3): dark 0.07 to 0.165 (white text), light 0.74 to 0.31 (black text)."
+
+	^ theme == #light
+		  ifTrue: [ #( 0.74 0.58 0.43 0.31 ) at: aLevel + 1 ]
+		  ifFalse: [ #( 0.07 0.095 0.125 0.165 ) at: aLevel + 1 ]
 ]
 
 { #category : 'accessing' }
