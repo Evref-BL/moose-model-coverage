@@ -81,6 +81,24 @@ MMCCoveragePresenter newExample.
 - L'arbre du modèle est synchronisé avec le texte source : sélectionner une entité met en évidence son code, et se déplacer dans le texte sélectionne l'entité.
 - Un menu contextuel (clic droit) sur l'arbre propose Inspect.
 - La navigation se fait fichier par fichier, et bascule automatiquement sur le fichier de l'entité sélectionnée.
+- Le panneau Files est une arborescence : les chemins sont découpés en segments, et les dossiers à enfant unique sont compactés façon VS Code (par exemple `src/main/java`). La position de scroll est conservée quand on change de fichier.
+- L'entité sélectionnée est mise en avant : les autres surlignages deviennent plus transparents (alpha). Un clic sur le fond remet les alphas par défaut.
+- Un clic droit sur un surlignage du panneau Text propose Inspect, pour ouvrir l'entité du modèle correspondante.
+- Les positions des ancres sont correctes pour les fichiers contenant des caractères hors BMP (conversion des indices UTF-16 en indices Pharo).
+
+### Réglages des types (bouton Setting)
+
+Le bouton **Setting**, placé sous « Set root folder », ouvre la fenêtre « Settings - <modèle> ». Elle liste chaque type Famix ayant des source anchors, avec :
+
+- sa couleur (aperçu en direct, réinitialisable) ;
+- le nombre d'entités ;
+- une case **Show** pour afficher ou masquer ce type ;
+- des boutons **All / None**, qui agissent sur les lignes filtrées ;
+- un filtre.
+
+Les réglages sont conservés en image, par modèle.
+
+Un type décoché disparaît du panneau Model, des surlignages du texte et du pourcentage de couverture : cela définit la granularité de l'affichage. L'en-tête indique « | N type(s) hidden ».
 
 ## Limites connues
 
