@@ -1,3 +1,9 @@
+"
+DEPRECATED - use MMCCoveragePresenter (package MooseModelCoverage-V2) instead. This V1 class is kept for backward compatibility only; the UI entry point CodeCoverageAnalyzer class>>runCoverageForModel:file: signals a Deprecation.
+V2 usage: MMCCoveragePresenter openOn: aMooseModel file: aFileName.
+
+I compute line-based coverage of a source file from the source anchors of a Moose model.
+"
 Class {
 	#name : 'CodeCoverageAnalyzer',
 	#superclass : 'Object',
@@ -23,7 +29,10 @@ CodeCoverageAnalyzer class >> example [
 
 { #category : 'actions' }
 CodeCoverageAnalyzer class >> runCoverageForModel: aMooseModel file: aFileName [
+	"DEPRECATED - the V1 UI entry point. Use MMCCoveragePresenter openOn: aMooseModel file: aFileName."
+
 	| analyzer ui |
+	self deprecated: 'Use MMCCoveragePresenter openOn:file: instead.'.
 	analyzer := CodeCoverageAnalyzer new.
 	analyzer loadModel: aMooseModel file: aFileName.
 	analyzer processAnchors.

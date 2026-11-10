@@ -44,19 +44,11 @@ MMCEntityRegion >> interval [
 	^ interval
 ]
 
-{ #category : 'private' }
+{ #category : 'accessing' }
 MMCEntityRegion >> metamodelPrefixOf: aClass [
-	"Answer the prefix shared by the entity classes of the metamodel of aClass, or 'Famix'.
-	The root entity class is the topmost class of the superclass chain named Famix<Metamodel>Entity."
+	"Answer the prefix shared by the entity classes of the metamodel of aClass, or 'Famix'."
 
-	| rootEntity |
-	rootEntity := aClass withAllSuperclasses reversed
-		              detect: [ :each |
-				              (each name beginsWith: 'Famix') and: [
-					              (each name endsWith: 'Entity') and: [
-						              each name size > 11 ] ] ]
-		              ifNone: [ ^ 'Famix' ].
-	^ rootEntity name allButLast: 6
+	^ MMCTypeName metamodelPrefixOf: aClass
 ]
 
 { #category : 'accessing' }
@@ -98,14 +90,7 @@ MMCEntityRegion >> text [
 
 { #category : 'accessing' }
 MMCEntityRegion >> typeName [
-	"Answer the entity class name without the Famix prefix and the metamodel prefix.
-	The metamodel prefix is the name of the root entity class of the metamodel, found in the superclass chain as a class named Famix<Metamodel>Entity (FamixJavaEntity gives FamixJava), so FamixJavaMethod gives Method. Without such a class only the Famix prefix is removed."
+	"Answer the entity class name without the Famix prefix and the metamodel prefix (FamixJavaMethod gives Method). See MMCTypeName."
 
-	| name prefix |
-	name := entity class name.
-	prefix := self metamodelPrefixOf: entity class.
-	(name beginsWith: prefix) ifTrue: [ ^ name allButFirst: prefix size ].
-	^ (name beginsWith: 'Famix')
-		  ifTrue: [ name allButFirst: 5 ]
-		  ifFalse: [ name ]
+	^ MMCTypeName ofClass: entity class
 ]
