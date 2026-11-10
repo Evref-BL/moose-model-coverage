@@ -6,7 +6,8 @@ Class {
 	#superclass : 'Object',
 	#instVars : [
 		'overrides',
-		'subscribers'
+		'subscribers',
+		'hiddenTypeNames'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -14,11 +15,18 @@ Class {
 
 { #category : 'comparing' }
 MMCColorScheme >> = anObject [
-	"Two schemes are equal when they have the same overrides (subscribers are ignored)."
+	"Two schemes are equal when they have the same overrides and the same hidden types (subscribers are ignored)."
 
 	^ self == anObject or: [
-		  self class == anObject class and: [
-			  overrides = anObject overrides ] ]
+			  self class == anObject class and: [
+					  overrides = anObject overrides and: [
+						  hiddenTypeNames = anObject hiddenTypeNames ] ] ]
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> hasHiddenTypes [
+
+	^ hiddenTypeNames isNotEmpty
 ]
 
 { #category : 'accessing' }
@@ -30,7 +38,34 @@ MMCColorScheme >> hasOverrides [
 { #category : 'comparing' }
 MMCColorScheme >> hash [
 
-	^ overrides hash
+	^ overrides hash bitXor: hiddenTypeNames hash
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> hiddenTypeNames [
+	"Answer a copy of the set of the hidden type names."
+
+	^ hiddenTypeNames copy
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> hideAll: aTypeNameCollection [
+	"Hide the types, in addition to those already hidden, with one single notification, and only when one of them was visible."
+
+	| before |
+	before := hiddenTypeNames size.
+	hiddenTypeNames addAll: aTypeNameCollection.
+	hiddenTypeNames size = before ifTrue: [ ^ self ].
+	self notifySubscribers
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> hideType: aTypeName [
+	"Hide the type and notify; nothing happens when it is already hidden."
+
+	(hiddenTypeNames includes: aTypeName) ifTrue: [ ^ self ].
+	hiddenTypeNames add: aTypeName.
+	self notifySubscribers
 ]
 
 { #category : 'initialization' }
@@ -38,13 +73,28 @@ MMCColorScheme >> initialize [
 
 	super initialize.
 	overrides := Dictionary new.
+	hiddenTypeNames := Set new.
 	subscribers := OrderedCollection new
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> isDefault [
+	"Answer true when there is no color override and no hidden type."
+
+	^ overrides isEmpty and: [ hiddenTypeNames isEmpty ]
 ]
 
 { #category : 'accessing' }
 MMCColorScheme >> isEmpty [
 
 	^ overrides isEmpty
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> isTypeVisible: aTypeName [
+	"A type is visible unless it was hidden; an unknown type is visible."
+
+	^ (hiddenTypeNames includes: aTypeName) not
 ]
 
 { #category : 'notification' }
@@ -85,10 +135,11 @@ MMCColorScheme >> overrides [
 
 { #category : 'initialization' }
 MMCColorScheme >> postCopy [
-	"The copy has its own overrides and no subscriber."
+	"The copy has its own overrides and hidden types and no subscriber."
 
 	super postCopy.
 	overrides := overrides copy.
+	hiddenTypeNames := hiddenTypeNames copy.
 	subscribers := OrderedCollection new
 ]
 
@@ -120,6 +171,43 @@ MMCColorScheme >> reset [
 
 	overrides isEmpty ifTrue: [ ^ self ].
 	overrides := Dictionary new.
+	self notifySubscribers
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> setHiddenTypeNames: aTypeNameCollection [
+	"Replace the hidden types by aTypeNameCollection with one single notification, and only when the set changes."
+
+	| new |
+	new := Set withAll: aTypeNameCollection.
+	new = hiddenTypeNames ifTrue: [ ^ self ].
+	hiddenTypeNames := new.
+	self notifySubscribers
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> setType: aTypeName visible: aBoolean [
+
+	aBoolean
+		ifTrue: [ self showType: aTypeName ]
+		ifFalse: [ self hideType: aTypeName ]
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> showAll [
+	"Show every type and notify when some type was hidden."
+
+	hiddenTypeNames isEmpty ifTrue: [ ^ self ].
+	hiddenTypeNames := Set new.
+	self notifySubscribers
+]
+
+{ #category : 'accessing' }
+MMCColorScheme >> showType: aTypeName [
+	"Show the type and notify; nothing happens when it is already visible."
+
+	(hiddenTypeNames includes: aTypeName) ifFalse: [ ^ self ].
+	hiddenTypeNames remove: aTypeName.
 	self notifySubscribers
 ]
 

@@ -14,7 +14,9 @@ Class {
 		'parentByEntity',
 		'childrenByParent',
 		'rootEntities',
-		'indexByEntity'
+		'indexByEntity',
+		'hiddenTypeNames',
+		'typeNamesByClass'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -89,16 +91,18 @@ MMCModelNavigator >> buildTree [
 
 { #category : 'private' }
 MMCModelNavigator >> candidateEntities [
-	"Entities selected by the current filter and name filter, before adding their ancestors. The file anchors of the model are not shown in #all: they are not entities of the code and have no source anchor of their own."
+	"Entities selected by the current filter and name filter, before adding their ancestors. The file anchors of the model are not shown in #all: they are not entities of the code and have no source anchor of their own. The entities of a hidden type are never candidates."
 
 	| base |
 	model ifNil: [ ^ #(  ) ].
 	base := filter = #all
 		        ifTrue: [
 				        model allModelEntities reject: [ :each |
-					        (each respondsTo: #isFileAnchor) and: [
-						        each isFileAnchor ] ] ]
-		        ifFalse: [ regionsByEntity keys ].
+						        ((each respondsTo: #isFileAnchor) and: [
+							         each isFileAnchor ]) or: [ self isHiddenEntity: each ] ] ]
+		        ifFalse: [
+		        regionsByEntity keys reject: [ :each |
+			        self isHiddenEntity: each ] ].
 	nameFilter isEmpty ifTrue: [ ^ base ].
 	^ base select: [ :each |
 			  (self labelOf: each)
@@ -219,12 +223,18 @@ MMCModelNavigator >> filter: aSymbol [
 
 { #category : 'private' }
 MMCModelNavigator >> firstContainerOf: anEntity [
-	"Answer the first container of anEntity, or nil (containers allocates a fresh collection)."
+	"Answer the nearest visible container of anEntity, or nil. The containers of a hidden type are skipped, so that the entity is attached to its nearest visible ancestor (containers allocates a fresh collection)."
 
-	| containers |
-	(anEntity respondsTo: #containers) ifFalse: [ ^ nil ].
-	containers := anEntity containers.
-	^ containers ifEmpty: [ nil ] ifNotEmpty: [ containers first ]
+	| current steps |
+	current := anEntity.
+	steps := 0.
+	[
+		(current := self rawFirstContainerOf: current) notNil and: [
+			(self isHiddenEntity: current) and: [ (steps := steps + 1) < 1000 ] ] ]
+		whileTrue.
+	^ (current notNil and: [ self isHiddenEntity: current ])
+		  ifTrue: [ nil ]
+		  ifFalse: [ current ]
 ]
 
 { #category : 'private' }
@@ -269,6 +279,23 @@ MMCModelNavigator >> hasSourceAnchor: anEntity [
 		  anEntity sourceAnchor isNotNil ]
 ]
 
+{ #category : 'filtering' }
+MMCModelNavigator >> hiddenTypeNames [
+	"Answer a copy of the type names (see MMCTypeName) whose entities are not shown; empty by default."
+
+	^ hiddenTypeNames
+		  ifNil: [ Set new ]
+		  ifNotNil: [ :names | names copy ]
+]
+
+{ #category : 'filtering' }
+MMCModelNavigator >> hiddenTypeNames: aTypeNameCollection [
+	"Do not show the entities of these types: they are absent from the tree whatever the filter, and their visible descendants are attached to the nearest visible ancestor. An entity without source anchor is never hidden."
+
+	hiddenTypeNames := Set withAll: aTypeNameCollection.
+	self invalidateIndex
+]
+
 { #category : 'accessing' }
 MMCModelNavigator >> includes: anEntity [
 
@@ -295,6 +322,20 @@ MMCModelNavigator >> isCovered: anEntity [
 
 	self ensureIndex.
 	^ regionsByEntity includesKey: anEntity
+]
+
+{ #category : 'filtering' }
+MMCModelNavigator >> isHiddenEntity: anEntity [
+	"Answer true when the type of anEntity is hidden and anEntity has a source anchor."
+
+	| names |
+	names := hiddenTypeNames.
+	(names isNil or: [ names isEmpty ]) ifTrue: [ ^ false ].
+	typeNamesByClass ifNil: [ typeNamesByClass := IdentityDictionary new ].
+	^ (names includes: (typeNamesByClass
+			    at: anEntity class
+			    ifAbsentPut: [ MMCTypeName ofClass: anEntity class ])) and: [
+		  self hasSourceAnchor: anEntity ]
 ]
 
 { #category : 'labels' }
@@ -383,6 +424,16 @@ MMCModelNavigator >> pathTo: anEntity [
 			path addFirst: (indexByEntity at: current).
 			current := parentByEntity at: current ifAbsent: [ nil ] ].
 	^ path asArray
+]
+
+{ #category : 'private' }
+MMCModelNavigator >> rawFirstContainerOf: anEntity [
+	"Answer the first container of anEntity, or nil."
+
+	| containers |
+	(anEntity respondsTo: #containers) ifFalse: [ ^ nil ].
+	containers := anEntity containers.
+	^ containers ifEmpty: [ nil ] ifNotEmpty: [ containers first ]
 ]
 
 { #category : 'regions' }

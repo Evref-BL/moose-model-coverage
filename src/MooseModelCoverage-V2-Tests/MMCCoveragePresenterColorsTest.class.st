@@ -351,7 +351,7 @@ MMCCoveragePresenterColorsTest >> testClickingColorsOpensOneWindowAndTheSecondCl
 			first := presenter colorSettingsWindow.
 			self assert: first notNil.
 			self assert: first isOpen.
-			self assert: first title equals: 'Colors - ' , presenter modelName.
+			self assert: first title equals: 'Settings - ' , presenter modelName.
 			self assert: self systemWindowCount equals: count + 1.
 			presenter colorsButton click.
 			self waitUpTo: 1000 until: [ false ].
@@ -460,7 +460,7 @@ MMCCoveragePresenterColorsTest >> testColorsButtonExistsWithItsLabel [
 	self assert: presenter colorsButton notNil.
 	self
 		assert: presenter colorsButton label
-		equals: 'Colors' , (String with: (Character value: 16r2026))
+		equals: 'Setting'
 ]
 
 { #category : 'tests - real window' }

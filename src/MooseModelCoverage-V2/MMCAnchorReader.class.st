@@ -10,7 +10,9 @@ Class {
 		'presetEntries',
 		'presetOtherFileAnchorCount',
 		'astralText',
-		'astralStarts'
+		'astralStarts',
+		'hiddenTypeNames',
+		'typeNamesByClass'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -59,6 +61,34 @@ MMCAnchorReader >> characterIndexOfUtf16: anInteger [
 	^ anInteger - low
 ]
 
+{ #category : 'accessing' }
+MMCAnchorReader >> hiddenTypeNames [
+	"Answer the type names (see MMCTypeName) whose entities are ignored silently; empty by default."
+
+	^ hiddenTypeNames ifNil: [ hiddenTypeNames := Set new ]
+]
+
+{ #category : 'accessing' }
+MMCAnchorReader >> hiddenTypeNames: aTypeNameCollection [
+	"Ignore silently the entries whose entity has one of these type names: they give no region and are not reported as ignored anchors. They are still used to find the file and its text."
+
+	hiddenTypeNames := Set withAll: aTypeNameCollection
+]
+
+{ #category : 'accessing' }
+MMCAnchorReader >> isHiddenEntry: anEntry [
+	"Answer true when the entity of anEntry has a hidden type. An entry without entity is never hidden."
+
+	| entity |
+	self hiddenTypeNames isEmpty ifTrue: [ ^ false ].
+	entity := anEntry value.
+	entity ifNil: [ ^ false ].
+	typeNamesByClass ifNil: [ typeNamesByClass := IdentityDictionary new ].
+	^ hiddenTypeNames includes: (typeNamesByClass
+			   at: entity class
+			   ifAbsentPut: [ MMCTypeName ofClass: entity class ])
+]
+
 { #category : 'private' }
 MMCAnchorReader >> prepareAstralStartsFor: aString [
 	"Compute once per text the UTF-16 start positions (1-based) of its astral characters. Empty when the text has none."
@@ -81,7 +111,7 @@ MMCAnchorReader >> prepareAstralStartsFor: aString [
 { #category : 'reading' }
 MMCAnchorReader >> read [
 	"Read the matched file once and answer an MMCAnchorReadResult.
-	Only the anchors added to the model are seen. File anchors that do not match, or that designate a file other than the one read, are only counted. If several distinct files match, the one with the smallest path is read."
+	Only the anchors added to the model are seen. File anchors that do not match, or that designate a file other than the one read, are only counted. If several distinct files match, the one with the smallest path is read. The non file anchors of a hidden type (see hiddenTypeNames:) are not reported as ignored, and the entries of a hidden type give no region; they still count to find the file and its text."
 
 	| ignored matched inFile otherFileAnchorCount file text |
 	ignored := OrderedCollection new.
@@ -90,8 +120,9 @@ MMCAnchorReader >> read [
 	self sourceAnchorEntries do: [ :entry |
 			entry key isFileAnchor
 				ifFalse: [
-						ignored add:
-							(MMCIgnoredAnchor anchor: entry key reason: #notFileAnchor) ]
+						(self isHiddenEntry: entry) ifFalse: [
+								ignored add:
+									(MMCIgnoredAnchor anchor: entry key reason: #notFileAnchor) ] ]
 				ifTrue: [
 						(matcher matchesAnchor: entry key)
 							ifTrue: [ matched add: entry ]
@@ -164,7 +195,7 @@ MMCAnchorReader >> regionOf: anEntry in: aString [
 
 { #category : 'private' }
 MMCAnchorReader >> regionsOf: anEntryCollection in: aString ignored: anIgnoredCollection [
-	"Answer the sorted regions of valid entries; add the others to anIgnoredCollection with their reason."
+	"Answer the sorted regions of valid entries; add the others to anIgnoredCollection with their reason. The entries of a hidden type are skipped silently: no region and no ignored anchor."
 
 	| regions textSize |
 	self prepareAstralStartsFor: aString.
@@ -172,12 +203,13 @@ MMCAnchorReader >> regionsOf: anEntryCollection in: aString ignored: anIgnoredCo
 	regions := OrderedCollection new.
 	anEntryCollection do: [ :entry |
 			| reason |
-			reason := self reasonToIgnore: entry textSize: textSize.
-			reason
-				ifNil: [ regions add: (self regionOf: entry in: aString) ]
-				ifNotNil: [
-						anIgnoredCollection add:
-							(MMCIgnoredAnchor anchor: entry key reason: reason) ] ].
+			(self isHiddenEntry: entry) ifFalse: [
+					reason := self reasonToIgnore: entry textSize: textSize.
+					reason
+						ifNil: [ regions add: (self regionOf: entry in: aString) ]
+						ifNotNil: [
+								anIgnoredCollection add:
+									(MMCIgnoredAnchor anchor: entry key reason: reason) ] ] ].
 	^ regions asArray sort: [ :a :b |
 			  a interval first ~= b interval first
 				  ifTrue: [ a interval first < b interval first ]

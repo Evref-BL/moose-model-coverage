@@ -16,7 +16,8 @@ Class {
 		'nonFileEntries',
 		'fileAnchorCount',
 		'typeCounts',
-		'classesByTypeName'
+		'classesByTypeName',
+		'hiddenTypeNames'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -115,16 +116,18 @@ MMCModelFiles >> computeTypeCounts [
 
 { #category : 'private' }
 MMCModelFiles >> coverageFor: aFile [
-	"Answer the MMCFileCoverage of aFile, computed on first request then cached. Only the entries of aFile gathered by the inventory are used: the model is not scanned again."
+	"Answer the MMCFileCoverage of aFile, computed on first request then cached. Only the entries of aFile gathered by the inventory are used: the model is not scanned again. The entries of the hidden types are ignored by the reader, but still counted in otherFileAnchorCount."
 
 	^ coverages at: aFile ifAbsentPut: [
 			  | fileEntries |
 			  fileEntries := entriesByFile at: aFile ifAbsent: [ #(  ) ].
-			  MMCFileCoverage fromReadResult: (MMCAnchorReader
-					   model: model
-					   file: aFile
-					   entries: nonFileEntries , fileEntries
-					   otherFileAnchorCount: fileAnchorCount - fileEntries size) read ]
+			  MMCFileCoverage fromReadResult: ((MMCAnchorReader
+					    model: model
+					    file: aFile
+					    entries: nonFileEntries , fileEntries
+					    otherFileAnchorCount: fileAnchorCount - fileEntries size)
+					   hiddenTypeNames: hiddenTypeNames;
+					   read) ]
 ]
 
 { #category : 'accessing' }
@@ -177,6 +180,24 @@ MMCModelFiles >> globalSummary [
 		  fileCount: coverages size
 		  size: size
 		  coveredSize: covered
+]
+
+{ #category : 'coverage' }
+MMCModelFiles >> hiddenTypeNames [
+	"Answer a copy of the hidden type names used to compute the coverages."
+
+	^ hiddenTypeNames copy
+]
+
+{ #category : 'coverage' }
+MMCModelFiles >> hiddenTypeNames: aTypeNameCollection [
+	"Use these hidden type names. Nothing happens when they are the current ones; otherwise the cached coverages are dropped (the inventory is kept)."
+
+	| new |
+	new := Set withAll: aTypeNameCollection.
+	new = hiddenTypeNames ifTrue: [ ^ self ].
+	self invalidate.
+	hiddenTypeNames := new
 ]
 
 { #category : 'accessing' }
@@ -248,6 +269,11 @@ MMCModelFiles >> setModel: aModel [
 	fileAnchorCount := 0.
 	typeCounts := nil.
 	classesByTypeName := nil.
+	hiddenTypeNames := (MMCColorSchemeRegistry schemes
+		                    at: aModel
+		                    ifAbsent: [ nil ])
+		                   ifNil: [ Set new ]
+		                   ifNotNil: [ :scheme | scheme hiddenTypeNames ].
 	self computeRootSegments.
 	self buildInventory
 ]

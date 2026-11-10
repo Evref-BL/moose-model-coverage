@@ -30,7 +30,10 @@ Class {
 		'pendingProcess',
 		'windowPresenter',
 		'rows',
-		'pendingType'
+		'pendingType',
+		'pendingVisibility',
+		'showAllButton',
+		'showNoneButton'
 	],
 	#category : 'MooseModelCoverage-V2',
 	#package : 'MooseModelCoverage-V2'
@@ -248,7 +251,13 @@ MMCColorSettingsPresenter >> defaultLayout [
 
 	^ SpBoxLayout newTopToBottom
 		  spacing: 4;
-		  add: filterField expand: false;
+		  add: (SpBoxLayout newLeftToRight
+				   spacing: 4;
+				   add: filterField;
+				   add: showAllButton width: 40;
+				   add: showNoneButton width: 50;
+				   yourself)
+			  expand: false;
 		  add: typeTable;
 		  add: messageLabel expand: false;
 		  add: (SpBoxLayout newLeftToRight
@@ -285,6 +294,19 @@ MMCColorSettingsPresenter >> effectiveColorOf: aTypeName [
 		  defaultColorBlock value: aTypeName ]
 ]
 
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> effectiveHiddenTypeNames [
+	"Answer the set of the hidden type names, the pending choices applied."
+
+	| hidden |
+	hidden := colorScheme hiddenTypeNames.
+	pendingVisibility keysAndValuesDo: [ :typeName :shown |
+			shown
+				ifTrue: [ hidden remove: typeName ifAbsent: [ ] ]
+				ifFalse: [ hidden add: typeName ] ].
+	^ hidden
+]
+
 { #category : 'table' }
 MMCColorSettingsPresenter >> fillTable [
 	"Fill the table with the sorted types matching the filter, keep the selection when the type is still there, and show a message when there is no type."
@@ -316,16 +338,32 @@ MMCColorSettingsPresenter >> filterField [
 
 { #category : 'debounce' }
 MMCColorSettingsPresenter >> flushPendingColor [
-	"Apply at once the pending color, if any, to the color scheme (which notifies the coverage window). Answer true when a color was applied. Synchronous: used by the debounce, when the selection changes, and when the window closes."
+	"Apply at once the pending color and the pending visibility choices, if any, to the color scheme (which notifies the coverage window). Answer true when something was applied. Synchronous: used by the debounce, when the selection changes, and when the window closes."
 
-	| typeName color |
+	| typeName color applied |
 	self cancelDebounce.
-	pendingColor ifNil: [ ^ false ].
-	typeName := pendingType.
-	color := pendingColor.
-	pendingType := nil.
-	pendingColor := nil.
-	colorScheme overrideAt: typeName put: color.
+	applied := false.
+	pendingColor ifNotNil: [
+			typeName := pendingType.
+			color := pendingColor.
+			pendingType := nil.
+			pendingColor := nil.
+			colorScheme overrideAt: typeName put: color.
+			applied := true ].
+	self flushPendingVisibility ifTrue: [ applied := true ].
+	applied ifTrue: [ self refreshTable ].
+	^ applied
+]
+
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> flushPendingVisibility [
+	"Apply at once the pending visibility choices to the color scheme in one atomic step (one single notification, none when nothing changes). Answer true when something was pending."
+
+	| hidden |
+	pendingVisibility isEmpty ifTrue: [ ^ false ].
+	hidden := self effectiveHiddenTypeNames.
+	pendingVisibility := Dictionary new.
+	colorScheme setHiddenTypeNames: hidden.
 	self refreshTable.
 	^ true
 ]
@@ -340,6 +378,13 @@ MMCColorSettingsPresenter >> hasMessageToKeep [
 MMCColorSettingsPresenter >> hasPendingColor [
 
 	^ pendingColor notNil
+]
+
+{ #category : 'debounce' }
+MMCColorSettingsPresenter >> hasPendingVisibility [
+	"True when a visibility choice waits for the debounce."
+
+	^ pendingVisibility isNotEmpty
 ]
 
 { #category : 'scheme' }
@@ -361,6 +406,13 @@ MMCColorSettingsPresenter >> hexTextChanged: aString [
 	self chooseColor: color
 ]
 
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> hideAllDisplayed [
+	"The None button: hide the displayed types."
+
+	self showDisplayedTypes: false
+]
+
 { #category : 'initialization' }
 MMCColorSettingsPresenter >> initialExtent [
 
@@ -373,6 +425,7 @@ MMCColorSettingsPresenter >> initialize [
 	generation := 0.
 	debounceMilliseconds := 250.
 	isLoadingEditor := false.
+	pendingVisibility := Dictionary new.
 	super initialize
 ]
 
@@ -402,6 +455,14 @@ MMCColorSettingsPresenter >> initializePresenters [
 					 (counts at: typeName ifAbsent: [ 0 ]) asString ];
 				 width: 80;
 				 yourself);
+		addColumn: (SpCheckBoxTableColumn new
+				 title: 'Show';
+				 evaluated: [ :typeName | self isTypeShown: typeName ];
+				 onActivation: [ :typeName | self setType: typeName shown: true ];
+				 onDeactivation: [ :typeName | self setType: typeName shown: false ];
+				 beNotExpandable;
+				 width: 50;
+				 yourself);
 		addColumn: (SpStringTableColumn new
 				 title: 'Color source';
 				 evaluated: [ :typeName |
@@ -423,6 +484,16 @@ MMCColorSettingsPresenter >> initializePresenters [
 		label: 'Pick' , (String with: (Character value: 16r2026));
 		help: 'Choose the color with a graphical color selector';
 		action: [ self pickColor ].
+	showAllButton := self newButton.
+	showAllButton
+		label: 'All';
+		help: 'Show all the listed types (those matching the filter)';
+		action: [ self showAllDisplayed ].
+	showNoneButton := self newButton.
+	showNoneButton
+		label: 'None';
+		help: 'Hide all the listed types (those matching the filter)';
+		action: [ self hideAllDisplayed ].
 	resetTypeButton := self newButton.
 	resetTypeButton
 		label: 'Reset type';
@@ -460,6 +531,15 @@ MMCColorSettingsPresenter >> isCustom: aTypeName [
 		  (colorScheme overrideFor: aTypeName) notNil ]
 ]
 
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> isTypeShown: aTypeName [
+	"Answer whether the type is shown in the coverage window: the pending choice when there is one, else the state of the color scheme."
+
+	^ pendingVisibility
+		  at: aTypeName
+		  ifAbsent: [ colorScheme isTypeVisible: aTypeName ]
+]
+
 { #category : 'editor' }
 MMCColorSettingsPresenter >> loadEditor [
 	"Show the effective color of the selected type in the preview and in the hexadecimal field, without choosing it."
@@ -487,6 +567,13 @@ MMCColorSettingsPresenter >> pendingColor [
 	"Answer the color waiting for the debounce, nil when none."
 
 	^ pendingColor
+]
+
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> pendingVisibility [
+	"Answer a copy of the choices waiting for the debounce (type name -> Boolean)."
+
+	^ pendingVisibility copy
 ]
 
 { #category : 'scheme' }
@@ -527,9 +614,10 @@ MMCColorSettingsPresenter >> refreshTable [
 
 { #category : 'actions' }
 MMCColorSettingsPresenter >> resetAll [
-	"Remove all the overrides of the scheme, dropping a color still pending."
+	"Go back to the automatic colors (colors only: the hidden types stay hidden), dropping a color still pending. A visibility choice still pending is applied first, not lost."
 
 	self cancelDebounce.
+	self flushPendingVisibility.
 	pendingType := nil.
 	pendingColor := nil.
 	colorScheme reset.
@@ -592,6 +680,29 @@ MMCColorSettingsPresenter >> selectedType [
 	^ selectedType
 ]
 
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> setType: aTypeName shown: aBoolean [
+	"The user ticked or unticked the type: keep the choice (the table shows it at once) and apply it to the color scheme after the debounce delay; several choices in a row make one single application."
+
+	aBoolean = (colorScheme isTypeVisible: aTypeName)
+		ifTrue: [ pendingVisibility removeKey: aTypeName ifAbsent: [ ] ]
+		ifFalse: [ pendingVisibility at: aTypeName put: aBoolean ].
+	self scheduleApply
+]
+
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> showAllButton [
+
+	^ showAllButton
+]
+
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> showAllDisplayed [
+	"The All button: show the displayed types."
+
+	self showDisplayedTypes: true
+]
+
 { #category : 'editor' }
 MMCColorSettingsPresenter >> showColor: aColor [
 
@@ -599,10 +710,33 @@ MMCColorSettingsPresenter >> showColor: aColor [
 	hexField text: (self class hexOf: aColor)
 ]
 
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> showDisplayedTypes: aBoolean [
+	"Show (true) or hide (false) at once all the types of the table, that is those matching the filter (all of them without filter), in one atomic application. The other types keep their state, pending choices included; a pending color keeps waiting for its own debounce."
+
+	| hidden |
+	hidden := self effectiveHiddenTypeNames.
+	aBoolean
+		ifTrue: [
+		rows do: [ :typeName | hidden remove: typeName ifAbsent: [ ] ] ]
+		ifFalse: [ hidden addAll: rows ].
+	self cancelDebounce.
+	pendingVisibility := Dictionary new.
+	colorScheme setHiddenTypeNames: hidden.
+	self refreshTable.
+	self hasPendingColor ifTrue: [ self scheduleApply ]
+]
+
 { #category : 'editor' }
 MMCColorSettingsPresenter >> showMessage: aString [
 
 	messageLabel label: aString
+]
+
+{ #category : 'visibility' }
+MMCColorSettingsPresenter >> showNoneButton [
+
+	^ showNoneButton
 ]
 
 { #category : 'table' }
@@ -676,9 +810,9 @@ MMCColorSettingsPresenter >> windowClosed [
 
 { #category : 'initialization' }
 MMCColorSettingsPresenter >> windowTitleText [
-	"Answer 'Colors - <model name>', or 'Colors' without model."
+	"Answer 'Settings - <model name>', or 'Settings' without model."
 
 	^ modelName
-		  ifNil: [ 'Colors' ]
-		  ifNotNil: [ :name | 'Colors - ' , name ]
+		  ifNil: [ 'Settings' ]
+		  ifNotNil: [ :name | 'Settings - ' , name ]
 ]

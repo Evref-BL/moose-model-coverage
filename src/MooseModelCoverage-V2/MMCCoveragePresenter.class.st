@@ -629,15 +629,22 @@ MMCCoveragePresenter >> anchorFileOf: anEntity [
 
 { #category : 'color scheme' }
 MMCCoveragePresenter >> applyColorScheme: aColorScheme [
-	"Rebuild the palette with the current scheme and refresh the highlights. Safe without widgets (nothing to refresh), for a scheme which is not the current one, and when called again while applying."
+	"Apply the current scheme. When its hidden types differ from those of the file inventory, they are given to it and the current file is computed again (the other files are computed again when shown, their labels become '?'; the tree of the files keeps its scroll position); this also rebuilds the palette. Otherwise only the palette is rebuilt and the highlights refreshed. Safe without widgets (nothing to refresh), for a scheme which is not the current one, and when called again while applying."
 
 	(isApplyingColorScheme == true or: [ aColorScheme ~~ colorScheme ])
 		ifTrue: [ ^ self ].
 	(fileCoverage isNil or: [ textPresenter isNil ]) ifTrue: [ ^ self ].
 	isApplyingColorScheme := true.
 	[
-		self buildPalette.
-		self refreshHighlights ] ensure: [ isApplyingColorScheme := false ]
+		((modelFiles notNil and: [ currentFile notNil ]) and: [
+			 aColorScheme hiddenTypeNames ~= modelFiles hiddenTypeNames ])
+			ifTrue: [
+					modelFiles hiddenTypeNames: aColorScheme hiddenTypeNames.
+					self loadFile: currentFile keepingFileTree: true ]
+			ifFalse: [
+					self buildPalette.
+					self refreshHighlights ] ] ensure: [
+		isApplyingColorScheme := false ]
 ]
 
 { #category : 'updating' }
@@ -663,12 +670,13 @@ MMCCoveragePresenter >> applyTheme: aSymbol [
 
 { #category : 'colors' }
 MMCCoveragePresenter >> buildColorsButton [
-	"Create the Colors button (the label ends with an ellipsis: the action opens a window)."
+	"Create the Setting button (the action opens the window of the colors and of the visibility of the Famix types)."
 
 	colorsButton := self newButton.
 	colorsButton
-		label: 'Colors' , (String with: (Character value: 16r2026));
-		help: 'Choose the color of each Famix type that has source anchors';
+		label: 'Setting';
+		help:
+			'Choose the color and the visibility of each Famix type that has source anchors';
 		action: [ self openColorSettings ]
 ]
 
@@ -748,9 +756,13 @@ MMCCoveragePresenter >> buildFileWidgets [
 
 { #category : 'tree' }
 MMCCoveragePresenter >> buildNavigator [
-	"Build the navigator on the current model and coverage, with the current filter."
+	"Build the navigator on the current model and coverage, with the hidden types of the file inventory (none without inventory) and the current filter."
 
 	navigator := MMCModelNavigator on: model coverage: fileCoverage.
+	navigator hiddenTypeNames:
+		(modelFiles
+			 ifNil: [ #(  ) ]
+			 ifNotNil: [ modelFiles hiddenTypeNames ]).
 	navigator filter: treeFilter
 ]
 
@@ -1330,6 +1342,15 @@ MMCCoveragePresenter >> globalSummaryText [
 							   (self formatPercentage: percentage) , '%' ]) ]
 ]
 
+{ #category : 'tree' }
+MMCCoveragePresenter >> hiddenTypeCount [
+	"Answer the number of hidden types applied to the coverages (0 without file inventory)."
+
+	^ modelFiles
+		  ifNil: [ 0 ]
+		  ifNotNil: [ modelFiles hiddenTypeNames size ]
+]
+
 { #category : 'files' }
 MMCCoveragePresenter >> indexFileNodes: aCollectionOfRoots [
 	"Remember the leaf of every file of the tree."
@@ -1775,8 +1796,9 @@ MMCCoveragePresenter >> refreshColorsButton [
 	colorsButton enabled: modelFiles notNil.
 	colorsButton help: (modelFiles notNil
 			 ifTrue: [
-			 'Choose the color of each Famix type that has source anchors' ]
-			 ifFalse: [ 'No inventory of source files: no Famix type to color' ])
+				 'Choose the color and the visibility of each Famix type that has source anchors' ]
+			 ifFalse: [
+			 'No inventory of source files: no Famix type to color or to hide' ])
 ]
 
 { #category : 'updating' }
@@ -2152,7 +2174,7 @@ MMCCoveragePresenter >> summaryPresenter [
 MMCCoveragePresenter >> summaryText [
 	"Answer the one-line summary. Unreadable file: 'Unreadable file: ...'. Otherwise
 	'Covered C/N characters (P %) | significant S/T (Q %) | U uncovered zone(s) | I ignored anchor(s) | O anchor(s) in other files'
-	with percentages on one decimal, and 'n/a' instead of 'Q %' when there is no significant character."
+	with percentages on one decimal, and 'n/a' instead of 'Q %' when there is no significant character. ' | H type(s) hidden' is added only when some types are hidden."
 
 	| significant |
 	fileCoverage isReadable ifFalse: [ ^ self unreadableSummaryText ].
@@ -2181,7 +2203,12 @@ MMCCoveragePresenter >> summaryText [
 				  print: fileCoverage ignoredAnchors size;
 				  nextPutAll: ' ignored anchor(s) | ';
 				  print: fileCoverage otherFileAnchorCount;
-				  nextPutAll: ' anchor(s) in other files' ]
+				  nextPutAll: ' anchor(s) in other files'.
+			  self hiddenTypeCount > 0 ifTrue: [
+					  stream
+						  nextPutAll: ' | ';
+						  print: self hiddenTypeCount;
+						  nextPutAll: ' type(s) hidden' ] ]
 ]
 
 { #category : 'files' }
@@ -2525,7 +2552,7 @@ MMCCoveragePresenter >> updateFileCoverage: aCoverage model: aMooseModelOrNil [
 
 { #category : 'tree' }
 MMCCoveragePresenter >> updateTreeStatus [
-	"Show the message of the empty states: no Moose model, or no entity of the model anchored in the file."
+	"Show the message of the empty states: no Moose model, no entity of the model anchored in the file, or no visible entity because some types are hidden."
 
 	treeStatusText := model
 		                  ifNil: [
@@ -2533,8 +2560,12 @@ MMCCoveragePresenter >> updateTreeStatus [
 		                  ifNotNil: [
 				                  navigator roots isEmpty
 					                  ifTrue: [
-							                  'No entity of the model is anchored in this file (rootFolder: '
-							                  , self rootFolderText , ')' ]
+							                  self hiddenTypeCount > 0
+								                  ifTrue: [
+								                  'No visible entity: some types are hidden (see Setting)' ]
+								                  ifFalse: [
+										                  'No entity of the model is anchored in this file (rootFolder: '
+										                  , self rootFolderText , ')' ] ]
 					                  ifFalse: [ '' ] ].
 	treeStatusPresenter label: treeStatusText.
 	wholeModelTogglePresenter enabled: model notNil

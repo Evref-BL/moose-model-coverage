@@ -21,6 +21,32 @@ MMCColorSettingsPresenterTest >> assertColor: aColor isCloseTo: anotherColor [
 	self assert: (aColor blue - anotherColor blue) abs <= 0.01
 ]
 
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> checkboxButtonsIn: aWindow [
+	"The check box buttons of the rows of the table of the opened window, from top to bottom."
+
+	^ (aWindow adapter widget allMorphs select: [ :each |
+		   each class name = 'CheckboxButtonMorph' ]) asSortedCollection: [
+		  :a
+		  :b | a top <= b top ]
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> clickCheckbox: aMorph [
+	"A real click: a mouse down then a mouse up event on the morph."
+
+	#( #mouseDown #mouseUp ) do: [ :type |
+			aMorph handleEvent: (MouseButtonEvent new
+					 setType: type
+					 position: aMorph center
+					 which: 4
+					 buttons: (type = #mouseDown
+							  ifTrue: [ 4 ]
+							  ifFalse: [ 0 ])
+					 hand: World activeHand
+					 stamp: Time millisecondClockValue) ]
+]
+
 { #category : 'helpers' }
 MMCColorSettingsPresenterTest >> colorOfSwatchOf: aTypeName in: aPresenter [
 	"The color of the pixel of the swatch form shown in the Color column for the type."
@@ -29,6 +55,14 @@ MMCColorSettingsPresenterTest >> colorOfSwatchOf: aTypeName in: aPresenter [
 	form := aPresenter typeTable columns first readObject: aTypeName.
 	self assert: form extent equals: 16 @ 16.
 	^ form colorAt: 8 @ 8
+]
+
+{ #category : 'helpers' }
+MMCColorSettingsPresenterTest >> columnTitled: aString in: aPresenter [
+	"The column of the table of aPresenter having this title (no positional access)."
+
+	^ aPresenter typeTable columns detect: [ :each |
+		  each title = aString ]
 ]
 
 { #category : 'helpers' }
@@ -101,6 +135,43 @@ MMCColorSettingsPresenterTest >> tearDown [
 
 	presenter windowClosed.
 	super tearDown
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testAllAndNoneNotifyOnceAndOnlyWhenSomethingChanges [
+
+	| count |
+	count := self countNotificationsOfScheme.
+	presenter hideAllDisplayed.
+	self assert: count value equals: 1.
+	presenter hideAllDisplayed.
+	self assert: count value equals: 1.
+	presenter showAllDisplayed.
+	self assert: count value equals: 2.
+	presenter showAllDisplayed.
+	self assert: count value equals: 2
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testAllAndNoneWithoutFilterConcernEveryType [
+
+	presenter hideAllDisplayed.
+	self
+		assert: scheme hiddenTypeNames
+		equals: #( 'Class' 'Method' 'Access' ) asSet.
+	presenter showAllDisplayed.
+	self assert: scheme hiddenTypeNames isEmpty
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testAllShowsOnlyTheTypesMatchingTheFilter [
+
+	scheme hideAll: #( 'Class' 'Method' 'Access' ).
+	presenter filterField text: 'Cl'.
+	presenter showAllDisplayed.
+	self
+		assert: scheme hiddenTypeNames
+		equals: #( 'Method' 'Access' ) asSet
 ]
 
 { #category : 'tests - table' }
@@ -299,10 +370,13 @@ MMCColorSettingsPresenterTest >> testColorsButtonIsBelowSetRootFolderButton [
 
 	| coverage box |
 	coverage := MMCCoveragePresenter newMultiFileExample.
-	box := coverage rootAndColorButtonsLayout.
-	self assert: box children asArray equals: {
-			coverage setRootFolderButton.
-			coverage colorsButton }
+	[
+		box := coverage rootAndColorButtonsLayout.
+		self assert: box children asArray equals: {
+				coverage setRootFolderButton.
+				coverage colorsButton } ] ensure: [
+			MMCColorSchemeRegistry removeFor: coverage model.
+			coverage model rootFolder asFileReference ensureDeleteAll ]
 ]
 
 { #category : 'tests' }
@@ -310,14 +384,17 @@ MMCColorSettingsPresenterTest >> testColorsButtonOnExampleAndOpenerHook [
 
 	| coverage calls |
 	coverage := MMCCoveragePresenter newMultiFileExample.
-	calls := OrderedCollection new.
-	coverage colorSettingsOpener: [ :each |
-			calls add: each.
-			nil ].
-	self assert: coverage colorsButton isEnabled.
-	coverage openColorSettings.
-	self assert: calls asArray equals: { coverage }.
-	self assert: coverage colorSettingsWindow isNil
+	[
+		calls := OrderedCollection new.
+		coverage colorSettingsOpener: [ :each |
+				calls add: each.
+				nil ].
+		self assert: coverage colorsButton isEnabled.
+		coverage openColorSettings.
+		self assert: calls asArray equals: { coverage }.
+		self assert: coverage colorSettingsWindow isNil ] ensure: [
+			MMCColorSchemeRegistry removeFor: coverage model.
+			coverage model rootFolder asFileReference ensureDeleteAll ]
 ]
 
 { #category : 'tests - table' }
@@ -325,12 +402,16 @@ MMCColorSettingsPresenterTest >> testColumnTitlesAndKinds [
 
 	self
 		assert: (presenter typeTable columns collect: #title) asArray
-		equals: #( 'Color' 'Type' 'Entities' 'Color source' ).
+		equals: #( 'Color' 'Type' 'Entities' 'Show' 'Color source' ).
 	self
-		assert: presenter typeTable columns first class
+		assert: (self columnTitled: 'Color' in: presenter) class
 		equals: SpImageTableColumn.
 	self
-		assert: (presenter typeTable columns second readObject: 'Class')
+		assert: (self columnTitled: 'Show' in: presenter) class
+		equals: SpCheckBoxTableColumn.
+	self
+		assert:
+		((self columnTitled: 'Type' in: presenter) readObject: 'Class')
 		equals: 'Class'
 ]
 
@@ -496,6 +577,21 @@ MMCColorSettingsPresenterTest >> testFlushAppliesOnceAndTheDebounceThenDoesNothi
 	self assert: count value equals: 1
 ]
 
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testFlushPendingColorAlsoAppliesThePendingVisibility [
+
+	presenter debounceMilliseconds: 60000.
+	presenter selectTypeNamed: 'Class'.
+	presenter chooseColor: Color red.
+	presenter setType: 'Method' shown: false.
+	self assert: presenter flushPendingColor.
+	self assert: (scheme overrideFor: 'Class') equals: Color red.
+	self deny: (scheme isTypeVisible: 'Method').
+	self deny: presenter hasPendingColor.
+	self deny: presenter hasPendingVisibility.
+	self deny: presenter flushPendingColor
+]
+
 { #category : 'tests - debounce' }
 MMCColorSettingsPresenterTest >> testFlushWithoutPendingColorAnswersFalseAndDoesNotNotify [
 
@@ -560,7 +656,7 @@ MMCColorSettingsPresenterTest >> testForCoveragePresenterListsTheTypesOfTheInven
 					equals: coverage modelFiles typeNames asSet.
 				self
 					assert: settings windowTitleText
-					equals: 'Colors - ' , coverage modelName ] ensure: [
+					equals: 'Settings - ' , coverage modelName ] ensure: [
 				settings windowClosed ] ]
 ]
 
@@ -730,6 +826,33 @@ MMCColorSettingsPresenterTest >> testNoZombieProcessAfterManyChoicesAndAClose [
 	self assert: self debounceProcessesCount equals: before
 ]
 
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testNoneHidesOnlyTheTypesMatchingTheFilter [
+
+	scheme hideType: 'Method'.
+	presenter filterField text: 'Cl'.
+	self assert: presenter displayedTypeNames equals: #( 'Class' ).
+	presenter hideAllDisplayed.
+	self
+		assert: scheme hiddenTypeNames
+		equals: #( 'Class' 'Method' ) asSet.
+	self deny: (scheme isTypeVisible: 'Class').
+	self assert: (scheme isTypeVisible: 'Access')
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testNoneKeepsThePendingChoicesOfTheOtherTypes [
+
+	presenter debounceMilliseconds: 60000.
+	presenter setType: 'Access' shown: false.
+	presenter filterField text: 'Cl'.
+	presenter hideAllDisplayed.
+	self
+		assert: scheme hiddenTypeNames
+		equals: #( 'Class' 'Access' ) asSet.
+	self deny: presenter hasPendingVisibility
+]
+
 { #category : 'tests - real window' }
 MMCColorSettingsPresenterTest >> testOpenOnOpensANonModalWindowWithTheExpectedTitleAndExtent [
 	"Real window: openOn: returns at once (non modal) with the open window; it is always closed in ensure: and the number of windows is checked."
@@ -745,7 +868,7 @@ MMCColorSettingsPresenterTest >> testOpenOnOpensANonModalWindowWithTheExpectedTi
 						self assert: window isOpen.
 						self
 							assert: window title
-							equals: 'Colors - ' , coverage modelName.
+							equals: 'Settings - ' , coverage modelName.
 						self assert: window presenter initialExtent equals: 560 @ 420.
 						self assert: window initialExtent equals: 560 @ 420.
 						self assert: self systemWindowCount equals: windowsBefore + 1 ]
@@ -850,6 +973,80 @@ MMCColorSettingsPresenterTest >> testPickedColorIsDebouncedLikeAnyChoice [
 	self assert: (scheme overrideFor: 'Method') equals: Color blue
 ]
 
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testRealClickOnAShowCheckBoxHidesTheTypeInTheCoverageWindow [
+
+	World ifNil: [ self skip: 'no world' ].
+	self withExamplePresenterDo: [ :coverage |
+			| window settings before |
+			self guarded: [
+					[
+						window := MMCColorSettingsPresenter openOn: coverage.
+						settings := window presenter.
+						(Delay forMilliseconds: 500) wait.
+						before := coverage hiddenTypeCount.
+						self clickCheckbox: (self checkboxButtonsIn: window) first.
+						self waitUpTo: 2000 until: [ settings hasPendingVisibility not ].
+						self assert: before equals: 0.
+						self assert: coverage hiddenTypeCount equals: 1.
+						self assert:
+							(coverage colorScheme isTypeVisible:
+								 settings displayedTypeNames first) not ] ensure: [
+							window ifNotNil: [
+									[ window close ]
+										on: Error
+										do: [ :e | e return ] ] ] ] ]
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testRealClicksSpacedBy80msGiveOneNotificationAfterTheDebounce [
+
+	World ifNil: [ self skip: 'no world' ].
+	self withExamplePresenterDo: [ :coverage |
+			| window settings buttons count |
+			self guarded: [
+					[
+						window := MMCColorSettingsPresenter openOn: coverage.
+						settings := window presenter.
+						self assert: settings debounceMilliseconds equals: 250.
+						(Delay forMilliseconds: 500) wait.
+						buttons := self checkboxButtonsIn: window.
+						self
+							assert: buttons size
+							equals: settings displayedTypeNames size.
+						self assert: buttons size >= 2.
+						count := 0.
+						coverage colorScheme whenChangedDo: [ count := count + 1 ].
+						buttons do: [ :each |
+								self clickCheckbox: each.
+								(Delay forMilliseconds: 80) wait ].
+						self assert: settings hasPendingVisibility.
+						self assert: count equals: 0.
+						self assert: coverage colorScheme hiddenTypeNames isEmpty.
+						self waitUpTo: 2000 until: [ count > 0 ].
+						self assert: count equals: 1.
+						(Delay forMilliseconds: 400) wait.
+						self assert: count equals: 1.
+						self
+							assert: coverage colorScheme hiddenTypeNames
+							equals: settings displayedTypeNames asSet.
+						self deny: settings hasPendingVisibility ] ensure: [
+							window ifNotNil: [
+									[ window close ]
+										on: Error
+										do: [ :e | e return ] ] ] ] ]
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testResetAllAppliesAPendingVisibilityInsteadOfLosingIt [
+
+	presenter debounceMilliseconds: 60000.
+	presenter setType: 'Access' shown: false.
+	presenter resetAll.
+	self deny: (scheme isTypeVisible: 'Access').
+	self deny: presenter hasPendingVisibility
+]
+
 { #category : 'tests - reset and close' }
 MMCColorSettingsPresenterTest >> testResetAllDropsThePendingColor [
 
@@ -872,6 +1069,17 @@ MMCColorSettingsPresenterTest >> testResetAllOnAnEmptySchemeDoesNotNotify [
 	count := self countNotificationsOfScheme.
 	presenter resetAll.
 	self assert: count value equals: 0
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testResetAllOnlyResetsTheColors [
+
+	scheme hideType: 'Class'.
+	scheme overrideAt: 'Method' put: Color red.
+	presenter resetAll.
+	self assert: scheme hiddenTypeNames equals: #( 'Class' ) asSet.
+	self assert: scheme typeNamesOverridden isEmpty.
+	self deny: (scheme isTypeVisible: 'Class')
 ]
 
 { #category : 'tests - reset and close' }
@@ -972,6 +1180,18 @@ MMCColorSettingsPresenterTest >> testSelectingATypeThatIsNotDisplayedDoesNothing
 	self assert: presenter selectedType equals: 'Class'
 ]
 
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testSelectingAnotherTypeAppliesThePendingVisibility [
+
+	presenter debounceMilliseconds: 60000.
+	presenter selectTypeNamed: 'Class'.
+	presenter setType: 'Access' shown: false.
+	self assert: (scheme isTypeVisible: 'Access').
+	presenter selectTypeNamed: 'Method'.
+	self deny: (scheme isTypeVisible: 'Access').
+	self deny: presenter hasPendingVisibility
+]
+
 { #category : 'tests - editor' }
 MMCColorSettingsPresenterTest >> testSelectingAnotherTypeChangesTheEditor [
 
@@ -1007,6 +1227,33 @@ MMCColorSettingsPresenterTest >> testSelectionLoadsTheEditorWithTheOverride [
 	scheme overrideAt: 'Method' put: (Color r: 1 g: 136 / 255.0 b: 0).
 	presenter selectTypeNamed: 'Method'.
 	self assert: presenter hexField text equals: '#FF8800'
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testSetTypeShownBackToTheStateOfTheSchemeCancelsTheChoice [
+
+	presenter debounceMilliseconds: 60000.
+	presenter setType: 'Class' shown: false.
+	presenter setType: 'Class' shown: true.
+	self deny: presenter hasPendingVisibility.
+	self deny: presenter flushPendingColor
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testSetTypeShownWaitsForTheFlushBeforeTouchingTheScheme [
+
+	| count |
+	count := self countNotificationsOfScheme.
+	presenter debounceMilliseconds: 60000.
+	presenter setType: 'Class' shown: false.
+	self deny: (presenter isTypeShown: 'Class').
+	self assert: presenter hasPendingVisibility.
+	self assert: (scheme isTypeVisible: 'Class').
+	self assert: count value equals: 0.
+	self assert: presenter flushPendingColor.
+	self deny: presenter hasPendingVisibility.
+	self deny: (scheme isTypeVisible: 'Class').
+	self assert: count value equals: 1
 ]
 
 { #category : 'tests - real window' }
@@ -1060,6 +1307,32 @@ MMCColorSettingsPresenterTest >> testSeveralQuickChoicesGiveOneOverrideOfTheLast
 	(Delay forMilliseconds: 150) wait.
 	self assert: count value equals: 1.
 	self assert: (scheme overrideFor: 'Class') equals: Color blue
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testSeveralVisibilityChoicesMakeOneNotification [
+
+	| count |
+	count := self countNotificationsOfScheme.
+	presenter debounceMilliseconds: 60000.
+	presenter setType: 'Class' shown: false.
+	presenter setType: 'Method' shown: false.
+	presenter flushPendingColor.
+	self
+		assert: scheme hiddenTypeNames
+		equals: #( 'Class' 'Method' ) asSet.
+	self assert: count value equals: 1
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testShowColumnFollowsTheScheme [
+
+	| column |
+	column := self columnTitled: 'Show' in: presenter.
+	self assert: (column readObject: 'Class').
+	scheme hideType: 'Class'.
+	self deny: (column readObject: 'Class').
+	self assert: (column readObject: 'Method')
 ]
 
 { #category : 'tests - table' }
@@ -1166,6 +1439,16 @@ MMCColorSettingsPresenterTest >> testWindowClosedAppliesThePendingColorAndUnsubs
 	self assert: self debounceProcessesCount equals: before.
 	scheme overrideAt: 'Class' put: Color blue.
 	self assert: count value equals: 2
+]
+
+{ #category : 'tests - visibility' }
+MMCColorSettingsPresenterTest >> testWindowClosedAppliesThePendingVisibility [
+
+	presenter debounceMilliseconds: 60000.
+	presenter setType: 'Class' shown: false.
+	presenter windowClosed.
+	self deny: (scheme isTypeVisible: 'Class').
+	self deny: presenter hasPendingVisibility
 ]
 
 { #category : 'tests - reset and close' }
